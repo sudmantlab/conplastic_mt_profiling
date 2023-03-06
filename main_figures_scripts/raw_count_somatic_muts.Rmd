@@ -1,0 +1,124 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggbeeswarm)
+```
+
+Recall, the supertable file has the read depth at every position (0-indexed) and the alt allele count at each position (where a lack of mutation is given by a 0). This file does not contain any mutations present at the haplotype sites
+
+```{r} 
+outdir_figures = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/figures"
+
+supertable_file = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+
+supertable = read.table(supertable_file, header = TRUE, stringsAsFactors = FALSE)
+
+```
+
+```{r}
+sample_somatic_mut_count = supertable %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH) %>%
+  #to ensure that we don't double count positions in two genes
+  unique() %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, ALT_ALLELE_DEPTH) %>% 
+  group_by(SAMPLE, STRAIN, TISSUE, AGE_BIN) %>% 
+  summarise(RAW_SOMATIC_MUT_COUNT = sum(ALT_ALLELE_DEPTH)) %>% 
+  mutate(X = 0)
+
+```
+
+Calculating the somatic mutation count 
+
+```{r}
+
+sample_median_count = median(sample_somatic_mut_count$RAW_SOMATIC_MUT_COUNT)
+sample_minimum_count = min(sample_somatic_mut_count$RAW_SOMATIC_MUT_COUNT)
+sample_total_mut_count = sum(sample_somatic_mut_count$RAW_SOMATIC_MUT_COUNT)
+
+print(sample_median_count)
+print(sample_total_mut_count)
+```
+
+
+```{r}
+
+sample_somatic_mut_count_fig = ggplot(sample_somatic_mut_count, aes(x = X, y = RAW_SOMATIC_MUT_COUNT)) + 
+  geom_beeswarm() +
+  geom_hline(yintercept = median(sample_somatic_mut_count$RAW_SOMATIC_MUT_COUNT), color = "red", linetype = "dashed") + 
+  annotate("text", x = 0.682, y = 53000, label = "Total: 1,171,918 somatic muts", size = 3.45) +
+  annotate("text", x = 0.667, y = 47000, label = "Median: 7,046 somatic muts ", size = 3.45, color = "red") + 
+  xlab("Samples") + 
+  ylab("Count of somatic mutations") +
+  scale_x_discrete(breaks = c(0, 0.1)) + 
+  theme_bw() + 
+  theme(axis.text = element_text(size=10), 
+        axis.title = element_text(size=11),
+        #axis.text.x = element_blank(), 
+        axis.text.y = element_text(size = 10),
+        strip.background= element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black")) 
+
+
+pdf(paste(outdir_figures, "/sample_som_mut_count_summary.pdf", sep = ""), width = 4, height = 3)
+print(sample_somatic_mut_count_fig)
+dev.off()
+
+```
+
+The somatic mutation count per condition 
+
+```{r}
+condition_som_mut_count = sample_somatic_mut_count %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, RAW_SOMATIC_MUT_COUNT) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN) %>%
+  summarise(COND_SOM_MUT_COUNT = sum(RAW_SOMATIC_MUT_COUNT))
+
+condition_som_mut_count$STRAIN = factor(condition_som_mut_count$STRAIN, levels = c("B6", "AKR", "ALR", "FVB", "NZB"))
+
+median = median(condition_som_mut_count$COND_SOM_MUT_COUNT)
+total_cond_count = sum(condition_som_mut_count$COND_SOM_MUT_COUNT)
+
+print(median)
+print(total_cond_count)
+```
+
+```{r}
+
+cond_som_mut_count = ggplot(condition_som_mut_count) + 
+  geom_beeswarm(aes(x = STRAIN, y = COND_SOM_MUT_COUNT, color = STRAIN)) +
+  annotate("text", x = 2.2, y = 1.92e+05, label = "Total: 1.2M", size = 3.5) +
+  annotate("text", x = 2.65, y = 1.55e+05, label = "Median: 40,449", size = 3.5) + 
+  xlab("Strains") + 
+  ylab("Count of somatic mutations") +
+  theme_bw(base_size = 16) + 
+  scale_color_manual(values = c("B6"= "#1d457f","AKR" = "#cc5c76", "ALR" = "#2f9e23", "FVB" = "#f57946", "NZB" = "#f7c22d")) + 
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = scales::trans_format("log10", math_format(10^.x))) +
+  theme(axis.text = element_text(size=11), 
+        axis.title = element_text(size=12),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), 
+        axis.text.y = element_text(size = 11),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black"), 
+        strip.background=element_blank(),
+        strip.text = element_text(face = "bold"), 
+        text = element_text(family = "sans"), 
+        legend.position = "none")
+
+pdf(paste(outdir_figures, "/cond_raw_som_mut_count.pdf", sep = ""), width = 2.35, height = 4)
+print(cond_som_mut_count)
+dev.off()
+
+```

@@ -1,0 +1,153 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+```
+
+```{r}
+
+outdir_figures <- "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/figures"
+
+supertable_file <-"~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable <- read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+coordinates_file <- "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/Mouse_Mt_Genome_Coordinates"
+coordinates <- read.table(coordinates_file, stringsAsFactors = FALSE, sep = "\t")
+
+```
+
+Creating our map of the linear mt-genome 
+
+```{r}
+#adding the D-Loop coordinates to our file 
+coordinates[nrow(coordinates) + 1, ] <- c("D-Loop", 15422, 16299)
+
+#adding column names to dataframe
+colnames(coordinates) <- c("GENE", "START", "END")
+
+coordinates$START <- as.numeric(coordinates$START)
+coordinates$END <- as.numeric(coordinates$END)
+
+#so things don't get wonky if the coordinates are read as strings -- also we convert our coordinates to be 0-indexed 
+coordinates$START <- as.numeric(coordinates$START) - 1
+coordinates$END <- as.numeric(coordinates$END) - 1
+
+coordinates = coordinates %>%
+  mutate(TYPE = case_when(grepl("mt-R", GENE) ~ "rRNA",
+                          grepl("mt-T", GENE) ~ "tRNA", 
+                          GENE == "D-Loop" ~ "D-Loop",
+                          GENE == "mt-OL" ~ "OriL",
+                          TRUE ~ "Protein"))
+```
+
+```{r}
+num_segs = length(coordinates$GENE)
+
+#important part here is to include the very last coordinate on the mt-genome map otherwise we miss our "last x coord" at the end of our map 
+
+x = c(coordinates$START, 16299) 
+
+xs = c(x[1:num_segs], x[1:num_segs], x[-1], x[-1], x[1:num_segs])
+ys = c(rep(0,num_segs), rep(1,num_segs), rep(1,num_segs), rep(0,num_segs), rep(0,num_segs))
+idx = rep(seq(1,num_segs),5)
+type = rep(coordinates$TYPE, 5)
+mt_genome_map = data.frame(x_pos = xs, y = ys, idx = idx, type = type) %>%
+  arrange(idx)
+
+#alternating the thickness of the protein regions to match the circular mt-genome map 
+mt_genome_map = mt_genome_map %>% 
+  mutate(y = ifelse(type == "Protein", ifelse(y == 0, -0.25, 1.25), y))
+```
+
+Plotting the linear map of the mt-genome
+
+```{r}
+library(RColorBrewer)
+lake_pal <- pnw_palette(name="Lake", type="discrete")
+spectral = brewer.pal(11,"Spectral")
+PRGn = brewer.pal(11,"PRGn")
+set1 = brewer.pal(3,"Set1")
+PuRd = brewer.pal(11,"PuRd")
+Blues = brewer.pal(9, "Blues")
+
+colors = c(Blues[9], set1[1], lake_pal[6], PuRd[6],PRGn[4])
+```
+
+```{r}
+
+linear_map = ggplot(mt_genome_map) 
+linear_map = linear_map + 
+  geom_polygon(aes(x=x_pos, y=y, group=idx, fill=type)) + 
+  theme_bw(base_size=16) +
+  theme(legend.position="None",
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        panel.grid=element_blank()) +
+  scale_y_continuous("") +
+  scale_x_continuous("Position") +
+  scale_fill_manual(name = "Genomic Region", values = colors) +
+  theme(strip.background = element_blank(),
+        strip.text=element_blank(),
+        text = element_text(family = "sans"), 
+        panel.border = element_blank(),
+        axis.title.x = element_text(size = 14), 
+        legend.position = "none")
+
+print(linear_map)
+
+```
+
+Now plotting the mutation frequency at each position for each condition -- but make it gray so it all blends in
+
+Note: We filter OUT high frequency positions > 1e-3
+```{r}
+mut_freq = supertable %>% 
+  select(START, CONDITION_MUT_FREQ_AT_POS) %>% 
+  filter(CONDITION_MUT_FREQ_AT_POS < 1e-3) %>% 
+  unique() %>%
+  filter(CONDITION_MUT_FREQ_AT_POS > 0) 
+```
+
+Plotting! 
+```{r}
+mut_freq_across_genome = ggplot(mut_freq) 
+
+mut_freq_across_genome = mut_freq_across_genome + 
+  geom_point(aes(x = START, y = CONDITION_MUT_FREQ_AT_POS), color = "gray", size = 0.3) + 
+  ylab("Mutation Frequency \n at Position") + 
+  xlab("") + 
+  scale_y_continuous(labels = scientific_format(digits = 2), breaks = seq(min(mut_freq$CONDITION_MUT_FREQ_AT_POS), 0.00125, by = 2.5e-4)) +
+  #ylim(min(dot_plot_df$CONDITION_MUT_FREQ_AT_POS), 0.001) + 
+  theme_classic(base_size = 16) + 
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(), 
+        legend.position = "None")
+
+png(paste(outdir_figures,"/wo_outliers_mut_freq_across_genome.png",sep=""),width=11.5,height=2, unit='in',res=800)
+print(mut_freq_across_genome)
+dev.off()
+
+
+```
+
+
+Without outliers (main figure)
+```{r}
+#margin is top, r, b, l
+gA <- ggplotGrob(mut_freq_across_genome+theme(plot.margin = unit(c(1,1,0,1), "cm")))
+gB <- ggplotGrob(linear_map+theme(plot.margin = unit(c(-.5,1,.5,1), "cm")))
+maxWidth = grid::unit.pmax(gA$widths[2:5], gB$widths[2:5])
+gA$widths[2:5] <- as.list(maxWidth)
+gB$widths[2:5] <- as.list(maxWidth)
+
+png(paste(outdir_figures,"/wo_outliers_mut_freq_across_genome_w_map.png",sep=""),width=11.5,height=3, unit='in',res=800)
+grid.arrange(gA,gB,heights=c(3,1))
+dev.off()
+
+```

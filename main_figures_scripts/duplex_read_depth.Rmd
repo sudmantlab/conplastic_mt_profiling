@@ -1,0 +1,160 @@
+---
+title: "duplex_read_depth"
+output: html_notebook
+---
+
+This figure contributes to Fig 1d. 
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(ggbeeswarm)
+```
+
+```{r}
+
+outdir_figures <- "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/figures"
+
+supertable_file <-"~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+
+supertable <- read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+We calculate the average read depth across the mt-genome for each sample. This average represents the average number of duplex mt-genomes sequenced given that each mt-genome has a unique molecular identifier. 
+
+```{r}
+sample_depth = supertable %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS) %>%
+  unique() %>% 
+  group_by(SAMPLE, STRAIN, TISSUE, AGE_BIN) %>%
+  summarise(AVG_DUP_DEPTH = mean(READ_DEPTH_AT_POS))
+```
+
+
+```{r}
+
+sample_depth_plot = ggplot(sample_depth, aes(x = AVG_DUP_DEPTH)) +
+  geom_histogram(aes(y=..count../sum(..count..)), bins = 25) +
+  xlab("Duplex mt-genomes Profiled Per Sample") +
+  ylab("Proportion") + 
+  theme_bw() + 
+  theme(axis.text = element_text(size=10), 
+        axis.title = element_text(size=11),
+        axis.text.x = element_text(size = 10), 
+        axis.text.y = element_text(size = 10),
+        strip.background= element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black")) 
+
+pdf(paste(outdir_figures, "/dcs_read_depth_per_sample.pdf", sep = ""), width = 4, height = 3)
+print(sample_depth_plot)
+dev.off()
+```
+
+Quantifying the total bp depth per condition (strain x age x tissue) --> sum of the avg_bp_depth for all samples in a condition. 
+```{r}
+
+cond_depth = supertable %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS) %>%
+  #we want to filter any redundant positions (i.e. positions that are in two genes)
+  unique() %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, START) %>%
+  summarise(COND_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, COND_DEPTH_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>%
+  summarise(COND_AVG_DEPTH = mean(COND_DEPTH_AT_POS))
+
+```
+
+```{r}
+median_per_cond = median(cond_depth$COND_AVG_DEPTH)
+total_mt_genomes = floor(sum(cond_depth$COND_AVG_DEPTH))
+
+print(median_per_cond)
+print(total_mt_genomes)
+range(cond_depth$COND_AVG_DEPTH)
+
+#the lowest we can sequence is 
+1/max(cond_depth$COND_AVG_DEPTH)
+```
+
+
+```{r}
+
+cond_depth = cond_depth %>% 
+  mutate(STRAIN = recode(STRAIN, "F" = "FVB"))
+
+cond_depth$STRAIN = factor(cond_depth$STRAIN, levels = c("B6", "AKR", "ALR", "FVB", "NZB"))
+
+beeswarm_fig = ggplot(cond_depth) + 
+  geom_beeswarm(aes(x = STRAIN, y = COND_AVG_DEPTH, color = STRAIN)) +
+  annotate("text", x = 2.45, y = 5.3e+05, label = "Total: 2.5M", size = 3.75) + 
+  annotate("text", x = 3, y = 4.6e+05, label = "Median: 74,764", size = 3.75) + 
+  xlab("Strains") + 
+  ylab("Count of duplex mt-genomes") +
+   scale_color_manual(values = c("B6"= "#1d457f","AKR" = "#cc5c76", "ALR" = "#2f9e23", "FVB" = "#f57946", "NZB" = "#f7c22d")) + 
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = scales::trans_format("log10", math_format(10^.x))) + 
+  theme_bw(base_size = 16) + 
+  theme(axis.text = element_text(size=11), 
+        axis.title = element_text(size=12),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1), 
+        axis.text.y = element_text(size = 11),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black"), 
+        strip.background=element_blank(),
+        strip.text = element_text(face = "bold"), 
+        text = element_text(family = "sans"), 
+        legend.position = "none")
+
+pdf(paste(outdir_figures, "/beeswarm_duplex_depth_per_cond.pdf", sep = ""), width = 2.35, height = 4)
+print(beeswarm_fig)
+dev.off()
+                        
+                      
+```
+
+~~~~~~SCRATCH CODE~~~~~~~~~~
+
+This is a second method for estimating duplex depth from the raw number of duplex sequences. Note if our reads overlap this would give ~ 2-fold higher estimate.  
+
+```{r}
+
+dcs_read_depth_file <-"~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/files/duplex_read_depth.csv"
+
+dcs_read_depth <- read.table(dcs_read_depth_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+Filtering out the samples we will not be using in our analysis: 
+
+```{r}
+
+filtered_dcs_read_depth = dcs_read_depth %>%
+  filter(AGE_BIN != "MID") %>%
+  filter(!grepl("B6_Y3_Heart", sample)) %>%
+  filter(!grepl("B6_Y._Liver", sample))
+```
+
+```{r}
+
+#we multiply by the number of bp our reads covered (150x PE reads) and then divide by the length of the mtGenome to obtain the avg_bp_depth per sample 
+setwd(outdir_figures)
+filtered_dcs_read_depth$avg_bp_depth = (filtered_dcs_read_depth$read_count * 300) / 16299
+
+cleaned_dcs_read_depth = filtered_dcs_read_depth %>% 
+  separate(sample, c("STRAIN", "AGE", "TISSUE"), extra = "drop", sep = "_")
+
+mean_per_exp = mean(cleaned_dcs_read_depth$avg_bp_depth)
+print(mean_per_exp)
+range(cleaned_dcs_read_depth$avg_bp_depth)
+sum(cleaned_dcs_read_depth$avg_bp_depth)
+```
