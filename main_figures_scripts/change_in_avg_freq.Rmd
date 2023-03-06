@@ -1,0 +1,316 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(broom)
+library(ggsignif) 
+library(PNWColors)
+library(ggthemes)
+library(scales)
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+length_mtdna = 16299
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/change_in_mut_freq/figures"
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/change_in_mut_freq/files"
+
+supertable_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+adjusted_mut_freq_file <- "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/adjusted_mut_freq_for_haplotypes.csv"
+mut_freq <- read.table(adjusted_mut_freq_file, header=TRUE, stringsAsFactors = FALSE)
+
+bay_pal <- pnw_palette(name="Bay", type="discrete")
+```
+
+Calculating the total number of duplex bp -- this information gives us the "total number of possible events" for the Poisson Regression and confidence intervals
+
+```{r}
+filtered_mut_freq = mut_freq %>%
+  filter(AGE_BIN != "MID") %>%
+  filter(!grepl("B6_Y3_Heart", SAMPLE)) %>%
+  filter(!grepl("B6_Y._Liver", SAMPLE)) %>%
+  mutate(STRAIN = recode(STRAIN, "F" = "FVB")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, DENOMINATOR) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>%
+  summarise(TOTAL_DUPLEX_BP = sum(DENOMINATOR))
+
+```
+
+We need to calculate the count of mutations in a condition
+
+BIG BIG NOTE: there are coordinates that belong in multiple gene regions (~56 start pos). Both annotations are in the supertable so we need to select and unique as shown in the first two lines or we risk double counting based on these annotations. 
+
+```{r}
+
+mutations = supertable %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  unique() %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  group_by(SAMPLE, STRAIN, TISSUE, AGE_BIN, START) %>% 
+  mutate(SAMPLE_COUNT_AT_POS = sum(ALT_ALLELE_DEPTH)) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, SAMPLE_COUNT_AT_POS, READ_DEPTH_AT_POS) %>%
+  unique() %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, START) %>%
+  mutate(COND_MUT_COUNT_AT_POS = sum(SAMPLE_COUNT_AT_POS), COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, COND_MUT_COUNT_AT_POS, COND_READ_DEPTH_AT_POS) %>% 
+  unique() %>%
+  mutate(MUT_FREQ_AT_POS = COND_MUT_COUNT_AT_POS/COND_READ_DEPTH_AT_POS)
+
+```
+
+Calculating the total mutation count per condition 
+
+With HFPs: 
+
+```{r}
+total_mutation_count = mutations %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, COND_MUT_COUNT_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>%
+  summarise(TOTAL_MUT_COUNT = sum(COND_MUT_COUNT_AT_POS)) 
+```
+
+Without HFPs:
+
+Sanity check comparison with a second way to find the average mutation frequency in each condition -- they're pretty much the same frequencies :) 
+
+```{r}
+total_mutation_count_wo_hfps = mutations %>%
+  ungroup() %>%
+  filter(MUT_FREQ_AT_POS < 1e-3) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, COND_MUT_COUNT_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN) %>% 
+  summarise(TOTAL_MUT_COUNT = sum(COND_MUT_COUNT_AT_POS))
+```
+
+For recording purposes, here is the df of hfps: 
+
+```{r}
+hfps = mutations %>%
+  filter(MUT_FREQ_AT_POS > 0.001) 
+```
+
+Combine information in order to calculate the average mutation frequency and Poisson CIs: 
+
+```{r}
+mutations_analysis = total_mutation_count %>% 
+  inner_join(filtered_mut_freq, by = c("STRAIN","TISSUE", "AGE_BIN")) %>% 
+  mutate(AVG_MUT_FREQ = TOTAL_MUT_COUNT / TOTAL_DUPLEX_BP) %>% 
+  mutate(YMIN_COUNT = (qchisq(0.025, 2*TOTAL_MUT_COUNT))/2 , YMAX_COUNT = (qchisq(0.975, 2*(TOTAL_MUT_COUNT +1)))/2) %>%
+  mutate(YMIN_FREQ = YMIN_COUNT/(TOTAL_DUPLEX_BP) ,YMAX_FREQ = YMAX_COUNT/(TOTAL_DUPLEX_BP))
+
+mutations_analysis$STRAIN = factor(mutations_analysis$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+```
+
+```{r}
+mutations_wo_hfps_analysis = total_mutation_count_wo_hfps %>% 
+  inner_join(filtered_mut_freq, by = c("STRAIN","TISSUE", "AGE_BIN")) %>% 
+  mutate(AVG_MUT_FREQ = TOTAL_MUT_COUNT / TOTAL_DUPLEX_BP) %>% 
+  mutate(YMIN_COUNT = (qchisq(0.025, 2*TOTAL_MUT_COUNT))/2 , YMAX_COUNT = (qchisq(0.975, 2*(TOTAL_MUT_COUNT +1)))/2) %>%
+  mutate(YMIN_FREQ = YMIN_COUNT/(TOTAL_DUPLEX_BP) ,YMAX_FREQ = YMAX_COUNT/(TOTAL_DUPLEX_BP)) 
+
+mutations_wo_hfps_analysis$STRAIN = factor(mutations_wo_hfps_analysis$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+```
+
+Calculating the average fold change between young and old and also the average fold change across tissues
+
+```{r}
+#the average fold change across tissues
+mutations_wo_hfps_analysis %>% 
+  filter(!(STRAIN == "B6" & TISSUE == "Liver")) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, AVG_MUT_FREQ) %>%
+  pivot_wider(values_from = AVG_MUT_FREQ, names_from = AGE_BIN) %>% 
+  mutate(FOLD_CHANGE = OLD/YOUNG) %>% 
+  group_by(TISSUE) %>% 
+  summarise(AVG_FOLD_CHANGE = mean(FOLD_CHANGE))
+
+#the average fold change across conditions (strain x tissue)
+mutations_wo_hfps_analysis %>% 
+  filter(!(STRAIN == "B6" & TISSUE == "Liver")) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, AVG_MUT_FREQ) %>%
+  pivot_wider(values_from = AVG_MUT_FREQ, names_from = AGE_BIN) %>% 
+  mutate(FOLD_CHANGE = OLD/YOUNG) %>% 
+  select(FOLD_CHANGE) %>% 
+  summarise(AVG_FOLD_CHANGE = mean(FOLD_CHANGE))
+
+
+```
+
+Running a Poisson regression (log-linear regression) to determine if there is a significant change in somatic mutation frequency with age 
+
+```{r}
+muts_regression = mutations_analysis %>%
+  ungroup(STRAIN, TISSUE, AGE_BIN) %>%
+  select(STRAIN, TISSUE, AGE_BIN, TOTAL_MUT_COUNT, TOTAL_DUPLEX_BP) %>%
+  #this is the one condtion we cannot compare data for 
+  filter(!(STRAIN == "B6" & TISSUE == "Liver")) %>%
+  group_by(STRAIN, TISSUE) 
+
+#need to order the levels in order for the regression to compare old to young and provide the correct direction of change 
+muts_regression$AGE_BIN <- factor(muts_regression$AGE_BIN, levels = c("YOUNG", "OLD"))
+
+muts_regression = muts_regression %>% 
+  do(fit_mutfreq = tidy(glm(TOTAL_MUT_COUNT ~ AGE_BIN + offset(log(TOTAL_DUPLEX_BP)) , data = ., family = poisson(link = "log")))) %>%
+  unnest(fit_mutfreq)
+
+#calculating our positioning of the significance values on our figure, where we initiate our y position with respect to the greatest mutation frequency between young and old 
+y_position = mutations_analysis %>%
+  select(STRAIN, TISSUE, AGE_BIN, AVG_MUT_FREQ) %>%
+  group_by(STRAIN, TISSUE) %>%
+  summarise(y_pos = max(AVG_MUT_FREQ))
+
+muts_p_values = muts_regression %>%
+  filter(term == "AGE_BINOLD") %>%
+  select(STRAIN, TISSUE, estimate, p.value) %>%
+  mutate(p.values_adj=p.adjust(p.value,method="bonferroni")) %>%
+  mutate(p.values_rounded = signif(p.values_adj, digits = 2)) %>%
+  mutate(SIG_MARK = ifelse(p.values_adj < 0.01, "**", "NS")) 
+
+muts_p_values$p.values_rounded[muts_p_values$SIG_MARK == "NS"] <- ""
+
+muts_p_values <- left_join(muts_p_values, y_position, by = c("STRAIN", "TISSUE")) %>%
+  mutate(Y_P_VAL = y_pos + 2.5e-5) 
+
+```
+
+```{r}
+muts_avg_mut_freq = ggplot(mutations_analysis, aes(x = TISSUE, y = AVG_MUT_FREQ, alpha = fct_rev(AGE_BIN), fill = TISSUE)) + 
+  geom_bar(stat = "identity", position=position_dodge(), width = 0.75) + 
+  facet_grid(STRAIN ~.) + 
+  geom_errorbar(aes(ymax = YMAX_FREQ, ymin = YMIN_FREQ), position=position_dodge(width = 0.75), width = 0.5) + 
+  geom_text(data = muts_p_values, aes(x = TISSUE, y = Y_P_VAL, label = p.values_rounded), color = "black", size = 2.5, inherit.aes = FALSE) +
+  theme_bw(base_size = 16) + 
+  scale_alpha_manual(name = "Age", labels = c("Young", "Old"), values = c(0.5, 1)) + 
+  scale_fill_manual(name = "Tissue" , values = bay_pal[c(1,5,4)], guide = "none") +
+  ylab("Average Mutation Frequency per Position") +  
+  xlab("Tissue") + 
+  ylim(c(0, 1.3e-04)) +  
+  theme(strip.background=element_blank(),
+         text = element_text(family = "sans"),
+         axis.title.x = element_text(size = 18),
+         axis.title.y = element_text( size = 16),
+         strip.text.x = element_text(size = 18),
+         axis.text.y=element_text(size = 10),
+         legend.position="bottom",
+        legend.title = element_text(size = 16))
+
+pdf(paste(outdir_figures,"/avg_mut_freq_w_hfps.pdf",sep=""),  width=3,height=6)
+print(muts_avg_mut_freq)
+dev.off()
+
+```
+
+Change in average mutation per position frequency for SNVs without high frequency positions
+
+```{r}
+muts_wo_hfps_regression = mutations_wo_hfps_analysis %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, TOTAL_MUT_COUNT, TOTAL_DUPLEX_BP) %>%
+  filter(!(STRAIN == "B6" & TISSUE == "Liver")) %>%
+  group_by(STRAIN, TISSUE) 
+
+#need to order the levels in order for the regression to compare old to young and provide the correct direction of change 
+muts_wo_hfps_regression$AGE_BIN = factor(muts_wo_hfps_regression$AGE_BIN, levels = c("YOUNG", "OLD"))
+
+muts_wo_hfps_regression = muts_wo_hfps_regression %>% 
+  do(fit_mutfreq = tidy(glm(TOTAL_MUT_COUNT ~ AGE_BIN + offset(log(TOTAL_DUPLEX_BP)) , data = ., family = poisson(link = "log")))) %>%
+  unnest(fit_mutfreq)
+
+#calculating our positioning of the significance values on our figure, where we initiate our y position with respect to the greatest mutation frequency between young and old 
+y_position = mutations_wo_hfps_analysis %>%
+  select(STRAIN, TISSUE, AGE_BIN, AVG_MUT_FREQ) %>%
+  group_by(STRAIN, TISSUE) %>%
+  summarise(y_pos = max(AVG_MUT_FREQ))
+
+muts_wo_hfps_p_values = muts_wo_hfps_regression %>%
+  filter(term == "AGE_BINOLD") %>%
+  select(STRAIN, TISSUE, estimate, p.value) %>%
+  mutate(p.values_adj=p.adjust(p.value,method="bonferroni")) %>%
+  mutate(p.values_rounded = signif(p.values_adj, digits = 2)) %>%
+  mutate(SIG_MARK = ifelse(p.values_adj < 0.01, "**", "NS")) 
+
+muts_wo_hfps_p_values$p.values_rounded[muts_wo_hfps_p_values$SIG_MARK == "NS"] <- ""
+
+muts_wo_hfps_p_values <- left_join(muts_wo_hfps_p_values, y_position, by = c("STRAIN", "TISSUE")) %>%
+  mutate(Y_P_VAL = y_pos + 8e-7) %>%
+  mutate(STRAIN_LABEL = recode(STRAIN, "F" = "FVB"))
+
+```
+
+```{r}
+
+grid_text = supertable %>%
+  ungroup() %>% 
+  select(STRAIN, AGE_BIN) %>%
+  unique() %>%
+  mutate(x = ifelse(STRAIN == "B6", 0.9, 1), y = 7.5e-6)
+
+b6_liver_label = data.frame(STRAIN = "B6", 
+                            TISSUE = 2.8,
+                            Y_POS = 3.15e-6,
+                            LABEL = "N.D.")
+
+```
+
+
+
+```{r}
+
+mutations_wo_hfps_analysis$STRAIN = factor(mutations_wo_hfps_analysis$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+grid_text$STRAIN = factor(grid_text$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+muts_wo_hfps_p_values$STRAIN = factor(muts_wo_hfps_p_values$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+b6_liver_label$STRAIN = factor(b6_liver_label$STRAIN, level = c("B6"))
+
+#adding a dummy row so that we can plot our B6 Old Liver Info 
+mutations_wo_hfps_analysis[nrow(mutations_wo_hfps_analysis) + 1, ] = list("B6", "Liver", "YOUNG", 0, 0, 0, 0, 0, 0, 0)
+
+```
+
+
+```{r}
+  
+muts_wo_hfps_avg_mut_freq = ggplot(mutations_wo_hfps_analysis, aes(x = TISSUE, y = AVG_MUT_FREQ, alpha = fct_rev(AGE_BIN), fill = TISSUE)) + 
+  geom_bar(stat = "identity", position=position_dodge(), width = 0.75) + 
+  geom_errorbar(aes(ymax = YMAX_FREQ, ymin = YMIN_FREQ), position=position_dodge(width = 0.75), width = 0.5) +
+  geom_text(data = muts_wo_hfps_p_values, aes(x = TISSUE, y = Y_P_VAL, label = p.values_rounded), color = "black", size = 2.25, inherit.aes = FALSE) +
+  geom_text(data = b6_liver_label, inherit.aes = FALSE, aes(x = TISSUE, y = Y_POS, label = LABEL), size = 2) + 
+  geom_text(data = grid_text, aes(x = x, y = y, label = STRAIN), inherit.aes = FALSE, size = 3.5) +
+  theme_bw(base_size = 16) + 
+  facet_grid(.~STRAIN) + 
+  scale_alpha_manual(name = "Age", labels = c("Young", "Old"), values = c(0.5, 1)) + 
+  scale_fill_manual(name = "Tissue", values = bay_pal[c(1,5,4)], guide = "none") +
+  ylab("Average \nmutation frequency") + 
+  xlab("Tissue") + 
+  theme(strip.background=element_blank(),
+        strip.text.x = element_blank(), 
+         text = element_text(family = "sans"),
+         axis.title.x = element_text(size = 9.35),
+         axis.title.y = element_text(size = 9),
+         axis.text.y=element_text(size = 8.5), 
+        axis.text.x =element_text(size = 8.5),
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/avg_mut_freq_wo_hfps.pdf",sep=""), width=8,height=1.75)
+print(muts_wo_hfps_avg_mut_freq)
+dev.off()
+
+
+#To obtain the age bin legend: 
+  
+pdf(paste(outdir_figures,"/leg_avg_mut_freq_wo_hfps.pdf",sep=""), width=8,height=4)
+print(muts_wo_hfps_avg_mut_freq + theme(legend.position = "right"))
+dev.off()
+
+```
+

@@ -1,0 +1,284 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(PNWColors)
+library(gridExtra)
+library(scales)
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/mutation_frequency_per_region/figures/"
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/mutation_frequency_per_region/files/"
+
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+coordinates_file <- "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/Mouse_Mt_Genome_Coordinates"
+coordinates <- read.table(coordinates_file, stringsAsFactors = FALSE, sep = "\t")
+```
+
+
+Formatting the coordinates file: 
+
+```{r}
+#adding the D-Loop coordinates to our file 
+coordinates[nrow(coordinates) + 1, ] <- c("D-Loop", 15422, 16299)
+
+#adding column names to dataframe
+colnames(coordinates) <- c("GENE", "START", "END")
+
+coordinates$START <- as.numeric(coordinates$START)
+coordinates$END <- as.numeric(coordinates$END)
+
+#so things don't get wonky if the coordinates are read as strings -- also we convert our coordinates to be 0-indexed 
+coordinates$START <- as.numeric(coordinates$START) - 1
+coordinates$END <- as.numeric(coordinates$END) - 1
+
+coordinates = coordinates %>%
+  mutate(TYPE = case_when(grepl("mt-R", GENE) ~ "rRNA",
+                          grepl("mt-T", GENE) ~ "tRNA", 
+                          GENE == "D-Loop" ~ "D-Loop",
+                          GENE == "mt-OL" ~ "OriL",
+                          TRUE ~ "Protein"))
+```
+
+Normalize for sequencing depth: 
+
+```{r}
+norm_seq_depth = supertable %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, REF, ALT, START, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS, CONDITION_MUT_FREQ_AT_POS) %>%
+  #unique here to get rid of redundant mutations present at pos that overlap in genes
+  unique() %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS, CONDITION_MUT_FREQ_AT_POS) %>% 
+  group_by(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS, CONDITION_MUT_FREQ_AT_POS) %>% 
+  summarise(SAMPLE_MUT_COUNT_AT_POS = sum(ALT_ALLELE_DEPTH)) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, SAMPLE_MUT_COUNT_AT_POS, READ_DEPTH_AT_POS, CONDITION_MUT_FREQ_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, START, CONDITION_MUT_FREQ_AT_POS) %>% 
+  summarise(CONDITION_MUT_COUNT_AT_POS = sum(SAMPLE_MUT_COUNT_AT_POS), CONDITION_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>%
+  ungroup() %>% 
+  group_by(START) %>% 
+  mutate(MIN_READ_DEPTH_AT_POS = min(CONDITION_READ_DEPTH_AT_POS)) %>% 
+  mutate(FLOOR_MIN_MUT_FREQ_AT_POS = 1/MIN_READ_DEPTH_AT_POS) %>% 
+  mutate(CONDITION_MUT_COUNT_AT_POS = ifelse(CONDITION_MUT_FREQ_AT_POS < FLOOR_MIN_MUT_FREQ_AT_POS, 0, CONDITION_MUT_COUNT_AT_POS)) 
+  
+```  
+
+Calculating the average mutation frequency in 150 bp windows without the high frequency positions
+```{r}
+
+mut_freq_sliding_window_avg = norm_seq_depth %>%
+  #this was the arbitrary frequency we define as being a high frequency position
+  filter(CONDITION_MUT_FREQ_AT_POS < 0.001) %>% 
+  mutate(NORM_CONDITION_MUT_FREQ_AT_POS = CONDITION_MUT_COUNT_AT_POS/CONDITION_READ_DEPTH_AT_POS) %>% 
+  ungroup() %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>% 
+  mutate(WINDOW_MUT_AVG = RcppRoll::roll_mean(NORM_CONDITION_MUT_FREQ_AT_POS,150,fill=NA)) %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, NORM_CONDITION_MUT_FREQ_AT_POS, WINDOW_MUT_AVG)
+
+```
+
+We identify the high frequency peaks that are shared across conplastic strains
+
+First, we create our gene labeller function
+
+```{r}
+
+gene_labeller = function(position){
+  gene_label = coordinates[((coordinates$START <= position) & (coordinates$END >= position)),]$GENE
+  
+  if (length(gene_label) < 1){
+    gene_label = "intergene_region"
+  }
+  
+  #in the case of the overlapping genes, assign the position to the first gene 
+  if (length(gene_label) > 1){
+    gene_label = gene_label[1]
+  }
+  
+  
+  return(gene_label)
+}
+
+```
+
+Finding mutation peaks > 1e-5 and locating peaks that are in > 3 strains 
+
+```{r}
+
+peak_ids = mut_freq_sliding_window_avg  %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, WINDOW_MUT_AVG) %>% 
+  #we want peaks that are not the D-Loop
+  filter(START < 15421) %>%
+  #we want windows that are above this arbitrary threshold -- we define these areas as peaks
+  filter(WINDOW_MUT_AVG > 1e-5) %>% 
+  rowwise() %>% 
+  mutate(GENE = gene_labeller(START)) %>% 
+  ungroup() %>% 
+  select(STRAIN, GENE) %>% 
+  unique() 
+  
+
+```
+
+Plotting time
+
+Color palette
+
+```{r}
+library(PNWColors)
+bay_pal <- pnw_palette(name="Bay", type="discrete")
+```
+
+```{r}
+
+grid_text = norm_seq_depth %>%
+  ungroup() %>% 
+  select(STRAIN, AGE_BIN) %>%
+  unique() %>%
+  mutate(x = ifelse(STRAIN == "B6", 25, 300), y = 4e-5)
+
+```
+
+```{r}
+
+peak_labels = bind_cols(data.frame(STRAIN = rep(c("AKR", "ALR", "B6", "FVB", "NZB"), 3)),
+                        data.frame(GENE = rep(c("mt-ND2", "OriL", "mt-Tr"), 5)),
+                        data.frame(X_POS = rep(c(4000, 5180, 9810), 5))
+                        )
+
+
+peak_labels = peak_labels %>%
+  mutate(Y_POS = ifelse(STRAIN == "NZB", 3.95e-5, 3e-5)) %>%
+  mutate(Y_POS = ifelse(GENE == "mt-ND2", 2e-5, Y_POS))
+```
+
+
+Plotting our sliding windows with our peak labels 
+
+```{r}
+
+mut_freq_sliding_window_avg$STRAIN = factor(mut_freq_sliding_window_avg$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+mut_freq_sliding_window_avg$AGE_BIN = factor(mut_freq_sliding_window_avg$AGE_BIN, level = c("YOUNG", "OLD"))
+grid_text$STRAIN = factor(grid_text$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+peak_labels$STRAIN = factor(peak_labels$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+
+mutation_freq_windows_plot = ggplot(mut_freq_sliding_window_avg %>% 
+                                 mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Young", "OLD" = "Old")))
+mutation_freq_windows_plot = mutation_freq_windows_plot + 
+  geom_line(aes(x=START, y=WINDOW_MUT_AVG, color=TISSUE), size= 0.3, alpha = 0.8) +
+  geom_text(data = grid_text, aes(x = x, y = y, label = STRAIN), size = 3.25) + 
+  geom_text(data = peak_labels, aes(x = X_POS, y = Y_POS, label = GENE), fontface = "italic", size=2.6) + 
+  scale_color_manual(name = "Tissue", values= bay_pal[c(1,5,4)], guide = "none") + 
+  theme_bw(base_size= 16) +
+  ylab("Average Mutation Frequency (150 bp)") + 
+  xlab("Position on the mt-genome (bp)") + 
+  facet_grid(STRAIN~AGE_LABEL) +
+  scale_x_continuous("") + 
+  ylim(0, 4.5e-5) + 
+  theme(strip.background=element_blank(),
+        strip.text=element_blank(),
+         panel.grid=element_blank(),
+         text = element_text(family = "sans"),
+         axis.title = element_text(size = 9.25),
+         axis.ticks.x = element_blank(),
+         axis.text.x = element_blank(),
+         strip.text.x = element_text(size = 10, vjust = 1),
+         axis.text.y=element_text(size = 8.25))
+
+print(mutation_freq_windows_plot)
+
+pdf(paste(outdir_figures,"/leg_mut_freq_sliding_windows.pdf",sep=""),width=9,height=8)
+print(mutation_freq_windows_plot + theme(legend.position="bottom") +
+  guides(color = guide_legend(override.aes = list(size = 3))))
+dev.off()
+
+```
+Creating the mt-genome map that we'll place at the bottom of the figure
+
+```{r}
+num_segs = length(coordinates$GENE)
+
+#important part here is to include the very last coordinate on the mt-genome map otherwise we miss our "last x coord" at the end of our map 
+
+x = c(coordinates$START, 16299) 
+
+xs = c(x[1:num_segs], x[1:num_segs], x[-1], x[-1], x[1:num_segs])
+ys = c(rep(0,num_segs), rep(1,num_segs), rep(1,num_segs), rep(0,num_segs), rep(0,num_segs))
+idx = rep(seq(1,num_segs),5)
+type = rep(coordinates$TYPE, 5)
+mt_genome_map = data.frame(x_pos = xs, y = ys, idx = idx, type = type) %>%
+  arrange(idx)
+
+mt_genome_map = rbind(mt_genome_map %>% mutate(AGE_BIN="Young"),mt_genome_map %>% mutate(AGE_BIN="Old"))
+
+#alternating the thickness of the protein regions to match the circular mt-genome map 
+mt_genome_map = mt_genome_map %>% 
+  mutate(y = ifelse(type == "Protein", ifelse(y == 0, -0.25, 1.25), y))
+```
+
+Plotting the linear map of the mt-genome
+
+```{r}
+library(RColorBrewer)
+lake_pal <- pnw_palette(name="Lake", type="discrete")
+spectral = brewer.pal(11,"Spectral")
+PRGn = brewer.pal(11,"PRGn")
+set1 = brewer.pal(3,"Set1")
+PuRd = brewer.pal(11,"PuRd")
+Blues = brewer.pal(9, "Blues")
+
+colors = c(Blues[9], set1[1], lake_pal[6], PuRd[6],PRGn[4])
+
+#colors = c(blues[10],blues[3],spectral[1],spectral[8],spectral[11])
+  #lake_pal[c(3,7,1,6,5)]
+
+#colors = c(lake_pal[c(3,7)],set1[1],lake_pal[6],PRGn[4])
+
+linear_map = ggplot(mt_genome_map) 
+linear_map = linear_map + 
+  geom_polygon(aes(x=x_pos, y=y, group=idx, fill=type)) + 
+  theme_bw(base_size=16) +
+  theme(legend.position="None",
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        panel.grid=element_blank()) +
+  scale_y_continuous("") +
+  scale_x_continuous("Position") +
+  scale_fill_manual(name = "Genomic Region", values = colors) + 
+  facet_grid(.~AGE_BIN) +
+  theme(strip.background = element_blank(),
+        strip.text=element_blank(),
+        text = element_text(family = "sans"), 
+        panel.border = element_blank(),
+        axis.title.x = element_text(size = 10), 
+        axis.text.x = element_text(size = 9.5), 
+        legend.position = "none")
+
+print(linear_map)
+
+```
+
+```{r}
+#margin is top, r, b, l
+gA <- ggplotGrob(mutation_freq_windows_plot+theme(plot.margin = unit(c(1,1,0,1), "cm")))
+gB <- ggplotGrob(linear_map+theme(plot.margin = unit(c(-.5,1,.5,1), "cm")))
+maxWidth = grid::unit.pmax(gA$widths[2:5], gB$widths[2:5])
+gA$widths[2:5] <- as.list(maxWidth)
+gB$widths[2:5] <- as.list(maxWidth)
+
+pdf(paste(outdir_figures,"/mut_freq_sliding_windows.pdf",sep=""),width=8,height=5)
+grid.arrange(gA,gB,heights=c(6,0.85))
+dev.off()
+
+```
+
