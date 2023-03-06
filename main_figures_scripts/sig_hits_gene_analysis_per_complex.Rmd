@@ -1,0 +1,118 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+
+#we need to download all of our simulated data 
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+outdir_files =  "files/"
+outdir_figures = "figures/"
+
+sig_analysis_file = "files/hNhS_per_gene_sig_hits.txt"
+sig_analysis = read.table(sig_analysis_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+We filter out B6 Young Liver from these analyses
+
+```{r}
+cond_filtered_sig_analysis = sig_analysis %>%
+  filter(!(STRAIN == "B6" & TISSUE == "Liver" & AGE_BIN == "YOUNG"))
+```
+
+```{r}
+rm(sig_analysis)
+```
+
+Filtering for our significant hits
+
+There are 71 genes out of 390 that we identified a significant signal for selection 
+
+```{r}
+
+sig_hits = cond_filtered_sig_analysis %>%
+  filter(P_ADJ < 0.01) %>%
+  #filtering out the sig hit that does not make sense
+  filter(!(STRAIN == "FVB" & TISSUE == "Brain" & AGE_BIN == "OLD" & GENE == "mt-Co1")) 
+
+```
+
+```{r}
+
+signals_per_gene = sig_hits %>% 
+  select(GENE, OBS_HNHS) %>%
+  mutate(SELECTION = ifelse(OBS_HNHS < 1, "N", "P")) %>% 
+  group_by(GENE, SELECTION) %>% 
+  summarise(COUNT = n()) %>% 
+  arrange(desc(COUNT)) %>% 
+  mutate(COUNT = ifelse(SELECTION == "N", -1*COUNT, COUNT)) %>% 
+  mutate(COMPLEX = case_when(grepl("mt-Atp", GENE) ~ "V",
+                             grepl("mt-Nd", GENE) ~ "I",
+                             GENE == "mt-Cytb" ~ "III",
+                             TRUE ~ "IV"
+    
+  )) %>% 
+  mutate(PROP = COUNT/29)
+
+ordering_genes = sig_hits %>% 
+  select(GENE) %>%
+  group_by(GENE) %>% 
+  summarise(COUNT = n()) %>% 
+  arrange(desc(COUNT)) 
+
+signals_per_gene$GENE = factor(signals_per_gene$GENE, level = (ordering_genes$GENE))
+
+```
+
+```{r}
+
+signals_per_gene %>% 
+  filter(GENE == "mt-Co2")
+
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+signal_per_gene_plot = ggplot(signals_per_gene, aes(x = GENE, y = PROP, fill = COMPLEX))
+
+signal_per_gene_plot = signal_per_gene_plot + 
+  geom_bar(stat = "identity", width = 0.7) + 
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  theme_bw(base_size = 16) + 
+  ylab("Proportion of Experiments") + 
+  xlab("Gene") + 
+  #ylim(-0.3, 0.4) + 
+  scale_fill_manual(name = "Complex", values = c("I" = "#bf9bdd" , "III" = "#ffc3a3", "IV" = "#e69e9c", "V" = "#cb74ad")) +
+  scale_y_continuous(limits = c(-0.3, 0.5), breaks = c(-0.2, 0, 0.2, 0.4), labels = c(0.2, 0, 0.2, 0.4)) + 
+  theme(text = element_text(family = "sans"), 
+        legend.position = "none", 
+        axis.title.x = element_text(size = 9.5),
+        axis.title.y = element_text(size = 9.5),
+        axis.text.x = element_text(size = 8, angle = 45, vjust = 1, hjust = 1), 
+        axis.text.y = element_text(size = 7.5))
+  
+
+pdf(paste(outdir_figures,"signals_of_selection_per_gene.pdf",sep=""), width=3,height=3)
+print(signal_per_gene_plot)
+dev.off()
+
+pdf(paste(outdir_figures,"leg_signals_of_selection_per_gene.pdf",sep=""), width=5,height=3)
+print(signal_per_gene_plot + theme(legend.position = "bottom"))
+dev.off()
+
+
+```
+

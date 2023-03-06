@@ -1,0 +1,432 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(broom)
+library(ggplot2)
+library(ggridges)
+library(PNWColors)
+```
+
+Colors for our genes are based on the complex 
+
+```{r}
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+outdir_files =  "files/"
+outdir_figures = "figures/"
+
+sims_hnhs_file = "files/sims_hNhS_ratios_per_gene.txt"
+sims_hnhs = read.table(sims_hnhs_file, header=TRUE, stringsAsFactors = FALSE)
+
+sig_analysis_file = "files/hNhS_per_gene_sig_hits.txt"
+sig_analysis = read.table(sig_analysis_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+We filter out B6 Young Liver from these analyses
+
+```{r}
+
+cond_filtered_sims_hnhs = sims_hnhs %>%
+  filter(!(STRAIN == "B6" & TISSUE == "Liver" & AGE_BIN == "YOUNG"))
+
+cond_filtered_sig_analysis = sig_analysis %>%
+  filter(!(STRAIN == "B6" & TISSUE == "Liver" & AGE_BIN == "YOUNG"))
+```
+
+```{r}
+
+rm(sims_hnhs, sig_analysis)
+
+```
+
+```{r}
+GeomSplitViolin <- ggproto(
+  "GeomSplitViolin", 
+  GeomViolin, 
+  draw_group = function(self, data, ..., draw_quantiles = NULL) {
+    data <- transform(data, 
+                      xminv = x - violinwidth * (x - xmin), 
+                      xmaxv = x + violinwidth * (xmax - x))
+    grp <- data[1,'group']
+    newdata <- plyr::arrange(
+      transform(data, x = if(grp%%2==1) xminv else xmaxv), 
+      if(grp%%2==1) y else -y
+    )
+    newdata <- rbind(newdata[1, ], newdata, newdata[nrow(newdata), ],
+                     newdata[1, ])
+    newdata[c(1,nrow(newdata)-1,nrow(newdata)), 'x'] <- round(newdata[1,
+                                                                      'x']) 
+    if (length(draw_quantiles) > 0 & !scales::zero_range(range(data$y))) {
+      stopifnot(all(draw_quantiles >= 0), all(draw_quantiles <= 1))
+      quantiles <- ggplot2:::create_quantile_segment_frame(data,
+                                                           draw_quantiles)
+      aesthetics <- data[rep(1, nrow(quantiles)), setdiff(names(data),
+                                                          c("x", "y")),
+                         drop = FALSE]
+      aesthetics$alpha <- rep(1, nrow(quantiles))
+      both <- cbind(quantiles, aesthetics)
+      quantile_grob <- GeomPath$draw_panel(both, ...)
+      ggplot2:::ggname("geom_split_violin", 
+                       grid::grobTree(GeomPolygon$draw_panel(newdata, ...),
+                                      quantile_grob))
+    } else {
+      ggplot2:::ggname("geom_split_violin",
+                       GeomPolygon$draw_panel(newdata, ...))
+    }
+  }
+)
+
+geom_split_violin <- function (mapping = NULL, 
+                               data = NULL, 
+                               stat = "ydensity", 
+                               position = "identity", ..., 
+                               draw_quantiles = NULL, 
+                               trim = TRUE, 
+                               scale = "area", 
+                               na.rm = FALSE, 
+                               show.legend = NA, 
+                               inherit.aes = TRUE) {
+  layer(data = data, 
+        mapping = mapping, 
+        stat = stat, 
+        geom = GeomSplitViolin, 
+        position = position, 
+        show.legend = show.legend, 
+        inherit.aes = inherit.aes, 
+        params = list(trim = trim, 
+                      scale = scale, 
+                      draw_quantiles = draw_quantiles, 
+                      na.rm = na.rm, ...)
+        )
+}
+
+```
+
+```{r}
+
+plot_sims = cond_filtered_sims_hnhs %>% 
+  filter(SIM_NONSYN_MUT_COUNT != 0) %>% 
+  filter(SIM_SYN_MUT_COUNT != 0) %>%
+  select(STRAIN, TISSUE, AGE_BIN, GENE, SIM_HNHS) %>% 
+  rename(RATIO = SIM_HNHS) %>% 
+  mutate(TYPE = "Simulated") %>% 
+ mutate(GENE_LABEL = case_when(grepl("mt-Nd1", GENE) ~ 1,
+                             grepl("mt-Nd2", GENE) ~ 2,
+                             grepl("mt-Nd3", GENE) ~ 3,
+                             GENE == "mt-Nd4" ~ 4,
+                             GENE == "mt-Nd4l" ~ 5,
+                             grepl("mt-Nd5", GENE) ~ 6,
+                             grepl("mt-Nd6", GENE) ~ 7,
+                             grepl("mt-Cytb", GENE) ~ 8,
+                             grepl("mt-Co1", GENE) ~ 9,
+                             grepl("mt-Co2", GENE) ~ 10,
+                             grepl("mt-Co3", GENE) ~ 11,
+                             grepl("mt-Atp6", GENE) ~ 12,
+                             TRUE ~ 13
+    
+  ))
+```
+
+```{r}
+sims_sum = plot_sims %>% 
+  select(GENE_LABEL, RATIO) %>% 
+  group_by(GENE_LABEL) %>% 
+  summarise(SIM_MEDIAN = median(log10(RATIO)), SIM_AVG = mean(log10(RATIO)))
+
+```
+
+```{r}
+
+plot_obs = cond_filtered_sig_analysis %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, OBS_HNHS) %>%
+  rename(RATIO = OBS_HNHS) %>% 
+  mutate(TYPE = "Observed") %>% 
+ mutate(GENE_LABEL = case_when(grepl("mt-Nd1", GENE) ~ 1,
+                             grepl("mt-Nd2", GENE) ~ 2,
+                             grepl("mt-Nd3", GENE) ~ 3,
+                             GENE == "mt-Nd4" ~ 4,
+                             GENE == "mt-Nd4l" ~ 5,
+                             grepl("mt-Nd5", GENE) ~ 6,
+                             grepl("mt-Nd6", GENE) ~ 7,
+                             grepl("mt-Cytb", GENE) ~ 8,
+                             grepl("mt-Co1", GENE) ~ 9,
+                             grepl("mt-Co2", GENE) ~ 10,
+                             grepl("mt-Co3", GENE) ~ 11,
+                             grepl("mt-Atp6", GENE) ~ 12,
+                             TRUE ~ 13
+    
+  ))
+
+```
+
+```{r}
+obs_sum = plot_obs %>% 
+  select(GENE_LABEL, RATIO) %>% 
+  group_by(GENE_LABEL) %>% 
+  summarise(OBS_MEDIAN = median(log10(RATIO)), OBS_AVG = mean(log10(RATIO)))
+
+```
+
+
+```{r}
+
+plotting_df = rbind(plot_obs, plot_sims)
+
+plotting_df$TYPE = factor(plotting_df$TYPE, level = c("Simulated", "Observed"))
+
+```
+
+
+```{r}
+
+obs_points = cond_filtered_sig_analysis %>%
+  select(STRAIN, TISSUE, AGE_BIN, GENE, P_ADJ, OBS_HNHS) %>% 
+  mutate(SIG = ifelse(P_ADJ < 0.01, "Y", "N")) %>%
+  mutate(SIG = ifelse(STRAIN == "FVB" & TISSUE == "Brain" & AGE_BIN == "OLD" & GENE == "mt-Co1", "N", SIG)) %>% 
+  mutate(GENE_LABEL = case_when(grepl("mt-Nd1", GENE) ~ 1,
+                             grepl("mt-Nd2", GENE) ~ 2,
+                             grepl("mt-Nd3", GENE) ~ 3,
+                             GENE == "mt-Nd4" ~ 4,
+                             GENE == "mt-Nd4l" ~ 5,
+                             grepl("mt-Nd5", GENE) ~ 6,
+                             grepl("mt-Nd6", GENE) ~ 7,
+                             grepl("mt-Cytb", GENE) ~ 8,
+                             grepl("mt-Co1", GENE) ~ 9,
+                             grepl("mt-Co2", GENE) ~ 10,
+                             grepl("mt-Co3", GENE) ~ 11,
+                             grepl("mt-Atp6", GENE) ~ 12,
+                             TRUE ~ 13
+    
+  ))
+
+
+```
+
+Plotting the violins 
+
+```{r}
+
+genes_violins = ggplot(data = plotting_df, aes(y = log10(RATIO), x = factor(GENE_LABEL), fill = TYPE)) + 
+  geom_split_violin(trim = FALSE, alpha = 0.4) + 
+  geom_point(data = sims_sum, inherit.aes = FALSE, aes(x = GENE_LABEL - 0.12, y = SIM_AVG), shape = 18 , size = 0.85, color = "red") +
+  geom_point(data = obs_sum, inherit.aes = FALSE, aes(x = GENE_LABEL + 0.1, y = OBS_AVG), shape = 18 , size = 0.85, color = "red") +
+  geom_point(data = obs_points, inherit.aes = FALSE, aes(x = GENE_LABEL + 0.35, y = log10(OBS_HNHS), color = STRAIN, shape = SIG), size = 0.7) + 
+  geom_hline(yintercept = 0, linetype = "dashed", size = 0.5, color = "gray") + 
+  ylab("log10(hN/hS)") + 
+  xlab("Gene") + 
+  scale_fill_manual(values = c("black","white")) + 
+  scale_shape_manual(label = c("N.S.", "Sig"), values = c(1, 19)) +
+  scale_color_manual(values = c("B6" = "#1d457f" , "AKR" = "#cc5c76", "ALR" = "#2f9e23", "FVB" = "#f57946", "NZB" = "#f7c22d")) +
+  scale_x_discrete(labels = c("mt-Nd1", "mt-Nd2", "mt-Nd3", "mt-Nd4", "mt-Nd4l", "mt-Nd5", "mt-Nd6", "mt-Cytb", "mt-Co1", "mt-Co2", "mt-Co3", "mt-Atp6", "mt-Atp8")) + 
+  theme_bw() + 
+  theme(text = element_text(family = "sans"),
+        axis.title.y = element_text(size = 11),
+        axis.text.y=element_text(size = 11), 
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1), 
+        legend.position = "none")
+
+  
+  
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+pdf(paste(outdir_figures,"genes_selection_dist.pdf",sep=""), width=4.25,height=3.75)
+print(genes_violins)
+dev.off()
+
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+pdf(paste(outdir_figures,"leg_genes_selection_dist.pdf",sep=""), width=9.5,height=3.75)
+print(genes_violins  + theme(legend.position = "bottom") + guides(shape = guide_legend(override.aes = list(size = 2)), color = guide_legend(override.aes = list(size = 2))))
+dev.off()
+
+```
+
+
+Comparing the averages of sims v obs per gene
+
+
+```{r}
+
+plotting_diff = sims_sum %>%
+  left_join(obs_sum, by = "GENE_LABEL") %>% 
+  select(GENE_LABEL, SIM_AVG, OBS_AVG) %>% 
+  mutate(DIFF = OBS_AVG - SIM_AVG)
+
+
+```
+
+
+Running our statistical tests:
+
+1) Are our simulation log10(means) non-zero? 
+
+One sample t-test for each gene with a BH correction -- double checked by running a t-test on the genes independently 
+
+```{r}
+
+plot_sims %>% 
+  mutate(LOG10_RATIO = log10(RATIO)) %>% 
+  select(GENE, LOG10_RATIO) %>% 
+  group_by(GENE) %>% 
+  do(tidy(t.test(.$LOG10_RATIO, alternative = "two.sided"))) %>% 
+  mutate(p_adj = p.adjust(p.value, method = "BH")) %>% 
+  mutate(SIG_STATUS = ifelse(p_adj < 0.01, "SIG", "N.S."))
+
+```
+
+2) Are our sims and obs distributions different? Wilcoxon Rank Sum Test with BH correction 
+
+```{r}
+
+sims_test = plot_sims %>%
+  select(GENE, RATIO) %>%
+  mutate(LOG10_RATIO = log10(RATIO)) %>%
+  mutate(LABEL = paste("SIM", GENE, sep = "_")) %>%
+  select(LABEL, GENE, LOG10_RATIO)
+  
+
+```
+
+```{r}
+
+obs_test = plot_obs %>%
+  select(GENE, RATIO) %>%
+  mutate(LOG10_RATIO = log10(RATIO)) %>%
+  mutate(LABEL = paste("OBS", GENE, sep = "_")) %>%
+  select(LABEL, GENE, LOG10_RATIO)
+
+```
+
+```{r}
+
+two_sample_t_test_df = rbind(obs_test, sims_test)
+
+```
+
+```{r}
+
+groups = list(c("SIM_mt-Atp6", "OBS_mt-Atp6"),
+              c("SIM_mt-Atp8", "OBS_mt-Atp8"),
+              c("SIM_mt-Co1", "OBS_mt-Co1"),
+              c("SIM_mt-Co2", "OBS_mt-Co2"),
+              c("SIM_mt-Co3", "OBS_mt-Co3"),
+              c("SIM_mt-Cytb", "OBS_mt-Cytb"),
+              c("SIM_mt-Nd1", "OBS_mt-Nd1"),
+              c("SIM_mt-Nd2", "OBS_mt-Nd2"),
+              c("SIM_mt-Nd3", "OBS_mt-Nd3"),
+              c("SIM_mt-Nd4", "OBS_mt-Nd4"),
+              c("SIM_mt-Nd4l", "OBS_mt-Nd4l"),
+              c("SIM_mt-Nd5", "OBS_mt-Nd5"),
+              c("SIM_mt-Nd6", "OBS_mt-Nd6")
+)
+
+```
+
+```{r}
+
+combos = groups %>%
+  set_names(map_chr(., ~ paste(., collapse = "_"))) 
+
+```
+
+```{r}
+
+two_sample_p_values = map_df(combos, function(y) {
+              filter(two_sample_t_test_df, LABEL %in% y) %>% 
+                t.test(LOG10_RATIO ~ LABEL, data = .) %>% 
+                broom::tidy()
+              }, .id = "contrast") %>%
+            mutate(p_adj = p.adjust(p.value, method = "BH")) %>% 
+  mutate(SIG_STATUS = ifelse(p_adj < 0.01, "SIG", "N.S."))
+
+
+sig_p_val = two_sample_p_values %>%
+  filter(SIG_STATUS == "SIG") %>%
+  mutate(X_POS = 0.35) %>%
+  mutate(GENE_LABEL = case_when(grepl("mt-Nd1", contrast) ~ 1,
+                             grepl("mt-Nd2", contrast) ~ 2,
+                             grepl("mt-Nd3", contrast) ~ 3,
+                             grepl("mt-Nd4l", contrast) ~ 5,
+                             grepl("mt-Nd5", contrast) ~ 6,
+                             grepl("mt-Nd6", contrast) ~ 7,
+                             grepl("mt-Cytb", contrast) ~ 8,
+                             grepl("mt-Co1", contrast) ~ 9,
+                             grepl("mt-Co2", contrast) ~ 10,
+                             grepl("mt-Co3", contrast) ~ 11,
+                             grepl("mt-Atp6", contrast) ~ 12,
+                             grepl("SIM_mt-Nd4_OBS_mt-Nd4", contrast) ~ 4,
+                             TRUE ~ 13
+    
+  ))
+  
+
+```
+
+Plotting difference in means with statistical test info 
+```{r}
+
+avg_diff = ggplot(plotting_diff, aes(y = factor(GENE_LABEL), x = DIFF))
+
+avg_diff = avg_diff + 
+  geom_point() + 
+  geom_segment(aes(y = GENE_LABEL, yend = GENE_LABEL, x = 0, xend=DIFF)) + 
+  geom_point(data = sig_p_val, inherit.aes = FALSE, aes(x = X_POS, y = GENE_LABEL), shape = 8, size = 1) + 
+  geom_text(aes(x = 0.25, y = 12.5, label = "two sample t-test\n BH adj. p-val < 0.01"), size = 2.75) + 
+  theme_bw() + 
+  scale_y_discrete(labels = c("mt-Nd1", "mt-Nd2", "mt-Nd3", "mt-Nd4", "mt-Nd4l", "mt-Nd5", "mt-Nd6", "mt-Cytb", "mt-Co1", "mt-Co2", "mt-Co3", "mt-Atp6", "mt-Atp8")) + 
+  scale_x_continuous(limits = c(0, 0.4), breaks = c(0, 0, 0.1, 0.2, 0.3, 0.4)) + 
+  xlab("Gene") + 
+  ylab("Difference of Average hN/hS \n[log10]") + 
+  theme_bw() + 
+  theme(text = element_text(family = "sans"),
+        axis.title.y = element_text(size = 11),
+        axis.title.x = element_text(size = 11),
+        axis.text.y=element_text(size = 10), 
+        axis.text.x = element_text(size = 10), 
+        legend.position = "none")
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+pdf(paste(outdir_figures,"avg_diff_genes.pdf",sep=""), width=2.75,height=3.75)
+print(avg_diff)
+dev.off()
+```
+Result: Not significant p-value ~ 0.5 and p-value = ~ 0.3 with a fisher's exact test 
+```{r}
+
+chi_df = cond_filtered_sig_analysis %>% 
+  select(STRAIN, OBS_HNHS, P_ADJ) %>% 
+  mutate(SEL = ifelse(OBS_HNHS < 1, "N", "P")) %>%
+  filter(P_ADJ < 0.01) %>%
+  mutate(STRAIN_LABEL = ifelse(STRAIN == "B6", "WT", "CONPLASTIC")) %>% 
+  select(STRAIN_LABEL, SEL) %>% 
+  group_by(STRAIN_LABEL, SEL) %>% 
+  summarise(COUNT = n()) %>%
+  ungroup() %>%
+  pivot_wider(names_from = STRAIN_LABEL, values_from = COUNT) %>%
+  column_to_rownames(var = "SEL")
+
+chi_mat = as.matrix(chi_df)
+
+fisher.test(chi_mat)
+```
+
+
+```{r}
+
+cond_filtered_sig_analysis %>% 
+  select(STRAIN, OBS_HNHS, P_ADJ) %>% 
+  mutate(SEL = ifelse(OBS_HNHS < 1, "N", "P")) %>%
+  filter(P_ADJ < 0.01) %>%
+  filter(SEL == "N") %>%
+  group_by(STRAIN, SEL) %>% 
+  summarise(COUNT = n())
+
+#P: 56 - 1 (bc of that weird FVB hit) = 55
+#N: 12
+# total sig hits: 67
+```

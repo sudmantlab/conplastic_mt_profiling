@@ -1,0 +1,410 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggridges)
+library(PNWColors)
+```
+
+```{r}
+#we need to download all of our simulated data 
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+outdir_files =  "files/"
+outdir_figures = "figures/"
+
+sims_hnhs_file = "files/sims_hNhS_ratios_per_gene.txt"
+sims_hnhs = read.table(sims_hnhs_file, header=TRUE, stringsAsFactors = FALSE)
+
+obs_hnhs_file = "files/obs_hNhS_ratios_per_gene.txt"
+obs_hnhs = read.table(obs_hnhs_file, header=TRUE, stringsAsFactors = FALSE)
+
+sig_analysis_file = "files/hNhS_per_gene_sig_hits.txt"
+sig_analysis = read.table(sig_analysis_file, header=TRUE, stringsAsFactors = FALSE)
+
+
+```
+We'll be using this function in future plots -- split violins are a bit of a pain. Source: https://rpubs.com/egnielsen/challenge_category_learning who cites DeBruine 2018
+Another good source: https://psyteachr.github.io/msc-conv/visualisation.html
+
+
+We filter out B6 Young Liver from these analyses
+
+```{r}
+
+cond_filtered_obs_hnhs = obs_hnhs %>%
+  filter(!(STRAIN == "B6" & TISSUE == "Liver" & AGE_BIN == "YOUNG"))
+
+cond_filtered_sims_hnhs = sims_hnhs %>%
+  filter(!(STRAIN == "B6" & TISSUE == "Liver" & AGE_BIN == "YOUNG"))
+
+cond_filtered_sig_analysis = sig_analysis %>%
+  filter(!(STRAIN == "B6" & TISSUE == "Liver" & AGE_BIN == "YOUNG"))
+```
+
+```{r}
+
+rm(obs_hnhs, sims_hnhs, sig_analysis)
+
+```
+
+
+```{r}
+GeomSplitViolin <- ggproto(
+  "GeomSplitViolin", 
+  GeomViolin, 
+  draw_group = function(self, data, ..., draw_quantiles = NULL) {
+    data <- transform(data, 
+                      xminv = x - violinwidth * (x - xmin), 
+                      xmaxv = x + violinwidth * (xmax - x))
+    grp <- data[1,'group']
+    newdata <- plyr::arrange(
+      transform(data, x = if(grp%%2==1) xminv else xmaxv), 
+      if(grp%%2==1) y else -y
+    )
+    newdata <- rbind(newdata[1, ], newdata, newdata[nrow(newdata), ],
+                     newdata[1, ])
+    newdata[c(1,nrow(newdata)-1,nrow(newdata)), 'x'] <- round(newdata[1,
+                                                                      'x']) 
+    if (length(draw_quantiles) > 0 & !scales::zero_range(range(data$y))) {
+      stopifnot(all(draw_quantiles >= 0), all(draw_quantiles <= 1))
+      quantiles <- ggplot2:::create_quantile_segment_frame(data,
+                                                           draw_quantiles)
+      aesthetics <- data[rep(1, nrow(quantiles)), setdiff(names(data),
+                                                          c("x", "y")),
+                         drop = FALSE]
+      aesthetics$alpha <- rep(1, nrow(quantiles))
+      both <- cbind(quantiles, aesthetics)
+      quantile_grob <- GeomPath$draw_panel(both, ...)
+      ggplot2:::ggname("geom_split_violin", 
+                       grid::grobTree(GeomPolygon$draw_panel(newdata, ...),
+                                      quantile_grob))
+    } else {
+      ggplot2:::ggname("geom_split_violin",
+                       GeomPolygon$draw_panel(newdata, ...))
+    }
+  }
+)
+
+geom_split_violin <- function (mapping = NULL, 
+                               data = NULL, 
+                               stat = "ydensity", 
+                               position = "identity", ..., 
+                               draw_quantiles = NULL, 
+                               trim = TRUE, 
+                               scale = "area", 
+                               na.rm = FALSE, 
+                               show.legend = NA, 
+                               inherit.aes = TRUE) {
+  layer(data = data, 
+        mapping = mapping, 
+        stat = stat, 
+        geom = GeomSplitViolin, 
+        position = position, 
+        show.legend = show.legend, 
+        inherit.aes = inherit.aes, 
+        params = list(trim = trim, 
+                      scale = scale, 
+                      draw_quantiles = draw_quantiles, 
+                      na.rm = na.rm, ...)
+        )
+}
+
+```
+
+Filtering out ratios that we cannot calculate (e.g. nsyn and syn counts are 0)
+```{r}
+#we did not lose any more entries (filtered out syn != 0 in earlier processing )
+filtered_obs_hnhs = cond_filtered_obs_hnhs %>% 
+  filter(OBS_NONSYN_MUT_COUNT != 0) %>% 
+  filter(OBS_SYN_MUT_COUNT != 0) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, OBS_HNHS)
+```
+
+```{r}
+#filtered 4,310 sims 1e-3 of the simulations
+filtered_sims_hnhs = cond_filtered_sims_hnhs %>% 
+  filter(SIM_NONSYN_MUT_COUNT != 0) %>% 
+  filter(SIM_SYN_MUT_COUNT != 0)
+
+```
+
+Calculating the average simulated hnhs ratio per gene in each experimental condition 
+
+```{r}
+avg_sim_ratios = filtered_sims_hnhs %>%
+  select(STRAIN, TISSUE, AGE_BIN, GENE, SIM_HNHS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE) %>% 
+  summarise(SIM_AVG_RATIO = mean(SIM_HNHS))
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+write.table(avg_sim_ratios, file = paste(outdir_files,"/avg_sim_ratios.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+
+```
+
+Note for reader:
+filtered_obs: contains all hnhs ratios that could be calculated regardless of significance 
+avg_sims: contains the average hnhs ratio for each gene in each simulation 
+sig_analysis: contains significance info of our obs hnhs ratios
+
+Calculating summary stats and cleaning data to compare obs. v sims hnhs ratios
+
+```{r}
+
+plotting_df = left_join(filtered_obs_hnhs, avg_sim_ratios, by = c("STRAIN", "TISSUE", "AGE_BIN", "GENE")) %>% 
+  pivot_longer(OBS_HNHS:SIM_AVG_RATIO, names_to = "TYPE", values_to = "RATIO") %>%
+  mutate(TYPE_LABEL = ifelse(TYPE == "OBS_HNHS", "Observed", "Simulated")) %>% 
+  mutate(SELECTION = ifelse(RATIO < 1, "N", "P")) %>% 
+  #x position for our split violin
+  mutate(X_POS = 1)
+
+sig_hnhs_plotting_df = cond_filtered_sig_analysis %>%
+  select(OBS_HNHS, P_ADJ) %>%
+  filter(P_ADJ < 0.01) %>% 
+  mutate(TYPE_LABEL = "OBS_HNHS", X_POS = 1.15) %>%
+  rename(RATIO = OBS_HNHS) %>%
+  select(RATIO, X_POS, TYPE_LABEL)
+
+plotting_df_sum = plotting_df %>% 
+  select(TYPE_LABEL, SELECTION, RATIO) %>% 
+  group_by(TYPE_LABEL, SELECTION) %>% 
+  summarise(MEAN = mean(log10(RATIO)), SEM = sd(log10(RATIO))/sqrt(n())) %>% 
+  mutate(X_POS = 1)
+
+plotting_df$TYPE_LABEL = factor(plotting_df$TYPE_LABEL, level = c("Simulated", "Observed"))
+plotting_df_sum$TYPE_LABEL = factor(plotting_df_sum$TYPE_LABEL, level = c("Simulated", "Observed"))
+
+```
+
+
+Plotting the simulated and observed ratio distributions
+
+```{r}
+
+sims_v_obs_plot = ggplot(data = plotting_df, aes(x = log10(RATIO), y = TYPE_LABEL, color = TYPE_LABEL))
+
+sims_v_obs_plot = sims_v_obs_plot + 
+  geom_density_ridges(fill = "white", size = 0.85, scale = 0.65) + 
+  geom_point(shape = "|", size = 1,position=position_nudge(y=-.05)) + 
+  geom_point(aes(x=MEAN, y=TYPE_LABEL, color = TYPE_LABEL), data=plotting_df_sum, size = 1.25) +
+  geom_errorbarh(data=plotting_df_sum, aes(xmin= MEAN-SEM,xmax=MEAN+SEM,y=TYPE_LABEL,color=TYPE_LABEL), height = 0.15, inherit.aes = FALSE) +
+  geom_vline(xintercept = 0 , color = "grey", linetype = "dashed", size = 0.4) + 
+  xlab("log10(hN/hS)") + 
+  ylab("Data") + 
+  theme_bw() + 
+  scale_y_discrete(expand = expansion(mult = c(0.01, .7))) +
+  scale_color_manual(name = "Data", values = c( "#d2848d", "black")) +
+  theme(panel.grid=element_blank(),
+        text = element_text(family = "sans"),
+        panel.border = element_blank(),
+        strip.background = element_blank(),
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 12),
+        strip.text.x = element_text(size = 11),
+        strip.text.y  = element_text(size = 11),
+        axis.text.y=element_text(size = 10), 
+        axis.text.x =element_text(size = 10), 
+        legend.positio = "none")
+  
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+pdf(paste(outdir_figures,"sims_v_obs_ratios.pdf",sep=""), width=3.5,height=2)
+print(sims_v_obs_plot)  
+dev.off()
+```
+
+Plotting obs v simulated hnhs ratios as split violins with SIM AVERAGES
+
+```{r}
+
+sims_v_obs_violin = ggplot(data = plotting_df, aes(x = X_POS, y = log10(RATIO), fill = TYPE_LABEL)) + 
+  geom_split_violin(trim = FALSE, alpha = 0.4) + 
+  geom_boxplot(aes(color = TYPE_LABEL), width = .15, alpha = .6,
+               position = position_dodge(.25), outlier.shape = NA) +
+  #geom_point(aes(x = X_POS, y=MEAN, color = TYPE_LABEL), data=plotting_df_sum, size = 1) +
+  #geom_errorbar(data=plotting_df_sum, aes(ymin= MEAN-SEM,ymax=MEAN+SEM,x=X_POS, color = TYPE_LABEL), width = 0.05, inherit.aes = FALSE) +
+  geom_point(data = sig_hnhs_plotting_df, aes(x = X_POS, y = log10(RATIO)), color = "#d2848d", size = 1, inherit.aes = FALSE) + 
+  geom_hline(yintercept = 0, linetype = "dashed", size = 0.5, color = "gray") + 
+  theme_light() + 
+  xlab("") + 
+  ylab("log10(hN/hS)") + 
+  scale_fill_manual(name = "Data", values = c("black", "#d2848d")) +
+  scale_color_manual(name = "Data", values = c("black", "#d2848d")) +
+  theme(text = element_text(family = "sans"),
+        strip.background = element_blank(),
+        axis.title.y = element_text(size = 12),
+        axis.text.y=element_text(size = 10), 
+        axis.text.x =element_blank(), 
+        axis.ticks.x =element_blank(),
+        legend.position = "none")
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+pdf(paste(outdir_figures,"violin_sims_v_obs_ratios.pdf",sep=""), width=2,height=3.5)
+print(sims_v_obs_violin)
+dev.off()
+
+```
+
+Simulations v observed counts with all simulated counts 
+
+```{r}
+
+obs_info = filtered_obs_hnhs %>%
+  select(OBS_HNHS) %>%
+  rename(RATIO = OBS_HNHS) %>% 
+  mutate(TYPE = "OBS")
+
+sim_info = filtered_sims_hnhs %>% 
+  select(SIM_HNHS) %>% 
+  rename(RATIO = SIM_HNHS) %>% 
+  mutate(TYPE = "SIM")
+
+plotting_all_sims_df = rbind(obs_info, sim_info) %>% 
+  mutate(X_POS = 1, TYPE_LABEL = ifelse(TYPE == "OBS", "Observed", "Simulated")) 
+
+rm(obs_info, sim_info)
+```
+
+Main Fig. 5A: comparing our simulated and observed ratios
+
+```{r}
+plotting_all_sims_df$TYPE_LABEL = factor(plotting_all_sims_df$TYPE_LABEL, level = c("Simulated", "Observed"))
+
+all_sims_v_obs_violin = ggplot(data = plotting_all_sims_df, aes(x = X_POS, y = log10(RATIO), fill = TYPE_LABEL)) + 
+  geom_split_violin(trim = FALSE, alpha = 0.4) + 
+  geom_boxplot(aes(fill = TYPE_LABEL), color = "black",  width = .15, alpha = .6,
+               position = position_dodge(.25), outlier.shape = NA) +
+  geom_hline(yintercept = 0, linetype = "dashed", size = 0.5, color = "gray") + 
+  theme_light() + 
+  xlab("") + 
+  ylab("log10(hN/hS)") + 
+  scale_fill_manual(name = "Data", values = c("black", "white")) +
+  scale_color_manual(name = "Data", values = c("black", "white")) +
+  theme(text = element_text(family = "sans"),
+        strip.background = element_blank(),
+        axis.title.y = element_text(size = 12),
+        axis.text.y=element_text(size = 10), 
+        axis.text.x =element_blank(), 
+        axis.ticks.x =element_blank(),
+        legend.position = "none")
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+pdf(paste(outdir_figures,"violin_all_sims_v_obs_ratios.pdf",sep=""), width=2,height=3.5)
+print(all_sims_v_obs_violin)
+dev.off()
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+pdf(paste(outdir_figures,"leg_violin_all_sims_v_obs_ratios.pdf",sep=""), width=3.25,height=3)
+print(all_sims_v_obs_violin + theme(legend.position = "bottom", legend.text = element_text(size = 14)))
+dev.off()
+
+```
+
+Running the Wilcoxon Rank Sum Test to see if there's a significant difference in medians between the simulated and obs. distribution 
+
+```{R}
+#incredibly large sample size that we see approached normality 
+sim_ratios = (plotting_all_sims_df %>% 
+                mutate(LOG10_RATIO = log10(RATIO)) %>%
+                filter(TYPE == "SIM"))$LOG10_RATIO
+
+#testing if the sample mean is different from 0
+t_summary = t.test(sim_ratios, alternative = "two.sided")
+
+print(t_summary)
+
+```
+
+```{r}
+#comparing if the average obs and sim ratios are different from each other 
+
+obs_ratios = (plotting_all_sims_df %>%
+                mutate(LOG10_RATIO = log10(RATIO)) %>%
+                filter(TYPE == "OBS"))$LOG10_RATIO
+
+wilcox.test(sim_ratios, obs_ratios, alternative = "two.sided")
+```
+
+
+Creating a split violin for all conditions 
+
+```{r}
+sim_ratios = avg_sim_ratios %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, SIM_AVG_RATIO) %>% 
+  rename(HNHS = SIM_AVG_RATIO) %>% 
+  mutate(LABEL = paste("SIM", AGE_BIN, sep = "_"))
+
+obs_ratios = filtered_obs_hnhs %>%
+  rename(HNHS = OBS_HNHS) %>%
+  mutate(LABEL = paste("OBS", AGE_BIN, sep = "_")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, HNHS, LABEL)
+```
+
+
+```{r}
+plotting_all_cond_df = rbind(sim_ratios, obs_ratios) %>% 
+  mutate(X_POS = ifelse(AGE_BIN == "OLD", "2", "1"))
+
+sig_plotting_points = cond_filtered_sig_analysis %>%
+  select(STRAIN, TISSUE, AGE_BIN, OBS_HNHS, P_ADJ) %>%
+  filter(P_ADJ < 0.01) %>% 
+  mutate(LABEL = paste("OBS", AGE_BIN, sep = "_"), 
+         X_POS = ifelse(AGE_BIN == "OLD", 2.15, 1.15)) %>%
+  rename(HNHS = OBS_HNHS) %>%
+  select(STRAIN, TISSUE, HNHS, X_POS, LABEL)
+  
+plotting_all_cond_df$LABEL = factor(plotting_all_cond_df$LABEL, level = c("SIM_OLD", "OBS_OLD", "SIM_YOUNG", "OBS_YOUNG"))
+sig_plotting_points$LABEL = factor(sig_plotting_points$LABEL, level = c("SIM_OLD", "OBS_OLD", "SIM_YOUNG", "OBS_YOUNG"))
+
+plotting_all_cond_df$STRAIN = factor(plotting_all_cond_df$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB" ))
+sig_plotting_points$STRAIN = factor(sig_plotting_points$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB" ))
+
+```
+
+Plotting all conditions as split violins
+
+```{r}
+all_conds_violin = ggplot(data = plotting_all_cond_df, aes(x = X_POS, y = log10(HNHS), fill = LABEL)) + 
+  geom_split_violin(trim = FALSE, alpha = 0.4) + 
+  geom_boxplot(aes(color = LABEL), width = .15, alpha = .6,
+               position = position_dodge(.25), outlier.shape = NA) +
+  geom_point(data = sig_plotting_points %>% filter(LABEL == "OBS_YOUNG"), aes(x = X_POS, y = log10(HNHS)), color ="#DE5D83", size = 0.7, inherit.aes = FALSE) + 
+   geom_point(data = sig_plotting_points %>% filter(LABEL == "OBS_OLD"), aes(x = X_POS, y = log10(HNHS)), color ="#A94064", size = 0.7, inherit.aes = FALSE) + 
+  geom_hline(yintercept = 0, linetype = "dashed", size = 0.5, color = "gray") +
+  facet_grid(STRAIN ~ TISSUE) +
+  theme_bw() + 
+  xlab("Age") + 
+  ylab("log10(hN/hS)") + 
+  scale_x_discrete(breaks = c(1,2), labels = c("1" = "Young", "2" = "Old")) +
+  scale_fill_manual(name = "Data", values = c("black", "#A94064", "grey45", "#DE5D83" )) +
+  scale_color_manual(name = "Data", values = c("black", "#A94064", "grey45", "#DE5D83" )) +
+  theme(text = element_text(family = "sans"),
+        strip.background = element_blank(),
+        axis.title.y = element_text(size = 12),
+        axis.title.x = element_text(size = 12),
+        axis.text.y=element_text(size = 10), 
+        axis.text.x=element_text(size = 10),
+        legend.position = "none")
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+pdf(paste(outdir_figures,"violin_all_conds.pdf",sep=""), width=6,height=5)
+print(all_conds_violin)
+dev.off()
+
+pdf(paste(outdir_figures,"leg_violin_all_conds.pdf",sep=""), width=8,height=5)
+print(all_conds_violin + 
+        #scale_fill_manual(labels = c("Simulated", "Observed", "Simulated", "Observed")) +
+        theme(legend.position = "bottom"))
+dev.off()
+
+```
+

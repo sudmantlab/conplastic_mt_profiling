@@ -1,0 +1,327 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Calculating the observed hNhS ratio from our data. 
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+outdir_files =  "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/files/"
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/figures/"
+
+B6_sims_wo_hfps_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/files/simulator_output/B6_wo_hfp_simulated_annotation_counts"
+
+AKR_sims_wo_hfps_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/files/simulator_output/AKR_wo_hfp_simulated_annotation_counts"
+  
+ALR_sims_wo_hfps_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/files/simulator_output/ALR_wo_hfp_simulated_annotation_counts"
+  
+FVB_sims_wo_hfps_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/files/simulator_output/F_wo_hfp_simulated_annotation_counts"
+  
+NZB_sims_wo_hfps_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/files/simulator_output/NZB_wo_hfp_simulated_annotation_counts"
+
+B6_sims_wo_hfps = read.table(B6_sims_wo_hfps_file, header=TRUE, stringsAsFactors = FALSE)
+AKR_sims_wo_hfps = read.table(AKR_sims_wo_hfps_file, header=TRUE, stringsAsFactors = FALSE)
+ALR_sims_wo_hfps = read.table(ALR_sims_wo_hfps_file, header=TRUE, stringsAsFactors = FALSE)
+FVB_sims_wo_hfps = read.table(FVB_sims_wo_hfps_file, header=TRUE, stringsAsFactors = FALSE)
+NZB_sims_wo_hfps = read.table(NZB_sims_wo_hfps_file, header=TRUE, stringsAsFactors = FALSE)
+ 
+```
+Combining our files from the simulation 
+
+```{r}
+#the F in the strain name was read at False when downloaded into R studio? Recoded the strain name for downstream analysis 
+
+FVB_sims_wo_hfps = FVB_sims_wo_hfps %>% 
+  mutate(STRAIN = "FVB")
+
+simulations_wo_hfps = bind_rows(B6_sims_wo_hfps, AKR_sims_wo_hfps, ALR_sims_wo_hfps, FVB_sims_wo_hfps, NZB_sims_wo_hfps)
+
+rm(B6_sims_wo_hfps, AKR_sims_wo_hfps, ALR_sims_wo_hfps, FVB_sims_wo_hfps, NZB_sims_wo_hfps)
+
+```
+
+Reading in the other files we'll need 
+```{r}
+
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+all_possible_muts_annotation_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/files/annotated_all_possible_variants.txt"
+all_possible_muts_annotation = read.table(all_possible_muts_annotation_file, header=TRUE, stringsAsFactors = FALSE)
+
+
+```
+
+```{r}
+
+possible_sites = all_possible_muts_annotation %>%
+  filter(ANNOTATION != "non_coding_transcript_exon_variant") %>% 
+  select(STRAIN, ANNOTATION, GENE) %>% 
+  mutate(STRAIN = recode(STRAIN, "F" = "FVB")) %>%
+  group_by(STRAIN, GENE, ANNOTATION) %>% 
+  summarise(SITE_COUNT = n()/3) %>% 
+  pivot_wider(names_from = ANNOTATION, values_from = SITE_COUNT) %>% 
+  mutate(NONSYN_SITE_COUNT = missense_variant, SYN_SITE_COUNT = synonymous_variant) %>% 
+  select(STRAIN, GENE, NONSYN_SITE_COUNT, SYN_SITE_COUNT)
+
+```
+
+
+```{r}
+
+
+average_read_depth = supertable %>% 
+  #to filter out tRNAs
+  filter(!grepl("mt-T", GENE)) %>% 
+  filter(GENE != "mt-OL", GENE != "intergene_region") %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, GENE, VARIANT_TYPE, ANNOTATION, READ_DEPTH_AT_POS) %>% 
+  filter(ANNOTATION != "non_coding_transcript_exon_variant" & ANNOTATION != "INDEL") %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE, START) %>% 
+  summarise(COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, COND_READ_DEPTH_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE) %>% 
+  summarise(AVG_READ_DEPTH = mean(COND_READ_DEPTH_AT_POS))
+
+
+```
+
+Merging the number of sites with the average read depth -- this calculation will give us the total number of sites. 
+
+```{r}
+
+total_num_sites = average_read_depth %>% 
+  left_join(possible_sites, by = c("STRAIN", "GENE")) %>% 
+  mutate(TOTAL_NONSYN_SITE_COUNT = AVG_READ_DEPTH*NONSYN_SITE_COUNT, TOTAL_SYN_SITE_COUNT = AVG_READ_DEPTH*SYN_SITE_COUNT)
+
+rm(possible_sites, average_read_depth)
+
+```
+
+Now calculating our observed hNhS ratio 
+
+```{r}
+
+observed_mut_counts = supertable %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, VARIANT_TYPE, ANNOTATION, ALT_ALLELE_DEPTH) %>% 
+  filter(VARIANT_TYPE == "SNV") %>% 
+  filter(ANNOTATION != "non_coding_transcript_exon_variant") %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, ANNOTATION, ALT_ALLELE_DEPTH) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE, ANNOTATION) %>% 
+  summarise(MUT_COUNT = sum(ALT_ALLELE_DEPTH)) %>% 
+  pivot_wider(names_from = ANNOTATION, values_from = MUT_COUNT) %>% 
+  mutate(OBS_NONSYN_MUT_COUNT = missense_variant, OBS_SYN_MUT_COUNT = synonymous_variant) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, OBS_NONSYN_MUT_COUNT, OBS_SYN_MUT_COUNT) 
+
+observed_mut_counts[is.na(observed_mut_counts)] <- 0
+
+
+```
+
+```{r}
+#we reformat our simulations long format to wide format in order to allow for easy calculations of the ratio
+simulations_reformated = simulations_wo_hfps %>% 
+  pivot_wider(names_from = ANNOTATION, values_from = COUNT) %>% 
+  mutate(SIM_NONSYN_MUT_COUNT = missense_variant, SIM_SYN_MUT_COUNT = synonymous_variant) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, SIM_RUN, SIM_NONSYN_MUT_COUNT, SIM_SYN_MUT_COUNT) 
+
+simulations_reformated[is.na(simulations_reformated)] <- 0
+
+rm(simulations_wo_hfps)
+
+```
+
+```{r}
+
+sims_data = simulations_reformated %>% 
+  left_join(total_num_sites, by = c("STRAIN", "TISSUE", "AGE_BIN", "GENE"))
+
+obs_data = observed_mut_counts %>% 
+  left_join(total_num_sites, by = c("STRAIN", "TISSUE", "AGE_BIN", "GENE")) 
+
+rm(simulations_reformated, observed_mut_counts, total_num_sites, supertable, all_possible_muts_annotation)
+
+```
+
+
+```{r}
+sims_hNhS_ratios = sims_data %>% 
+  mutate(sim_hN = SIM_NONSYN_MUT_COUNT/TOTAL_NONSYN_SITE_COUNT, sim_hS = SIM_SYN_MUT_COUNT/TOTAL_SYN_SITE_COUNT) %>% 
+  mutate(SIM_HNHS = sim_hN/sim_hS) %>%
+  #calculated hNhS as Inf because there are 0 syn mutations in the gene --> cannot calculate the hNhS ratio
+  filter(SIM_HNHS != "Inf")
+
+obs_hNhS_ratios = obs_data %>% 
+  mutate(obs_hN = OBS_NONSYN_MUT_COUNT/TOTAL_NONSYN_SITE_COUNT, obs_hS = OBS_SYN_MUT_COUNT/TOTAL_SYN_SITE_COUNT) %>% 
+  mutate(OBS_HNHS = obs_hN/obs_hS) %>%
+  #calculated hNhS as Inf because there are 0 syn mutations in the gene --> cannot calculate the hNhS ratio
+  filter(OBS_HNHS != "Inf")
+
+rm(obs_data, sims_data)
+
+```
+
+
+Plotting AHHHHH
+```{r}
+
+obs_hNhS_ratios$STRAIN = factor(obs_hNhS_ratios$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+obs_hNhS_ratios$AGE_BIN = factor(obs_hNhS_ratios$AGE_BIN, level = c("YOUNG", "OLD"))
+
+
+sims_hNhS_ratios$STRAIN = factor(sims_hNhS_ratios$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+sims_hNhS_ratios$AGE_BIN = factor(sims_hNhS_ratios$AGE_BIN, level = c("YOUNG", "OLD"))
+
+hnhs_wo_hfps_plot = ggplot(obs_hNhS_ratios)
+
+hnhs_wo_hfps_plot = hnhs_wo_hfps_plot + 
+  geom_violin(data = sims_hNhS_ratios, aes(x = log10(SIM_HNHS), y = GENE, fill = AGE_BIN), alpha = 0.7, size = 0, scale = "width") + 
+  geom_point(aes(x = log10(OBS_HNHS), y = GENE, color = AGE_BIN), size = 1 , shape = 8) +
+  xlab("log10(hN/hS)") + 
+  ylab("Gene") + 
+  facet_grid(STRAIN~TISSUE) + 
+  scale_color_manual(name = "Age", labels = c("Young", "Old"), values = c("grey57", "black")) + 
+  scale_fill_manual(name = "Age", labels = c("Young", "Old"), values = c("grey80", "black")) + 
+  theme_bw(base_size =  15) +
+  theme(strip.background=element_blank(),
+        strip.text = element_text(), 
+        text = element_text(family = "sans"), 
+        legend.position = "bottom") + 
+  coord_cartesian(xlim = c(-5, 5))
+
+pdf(paste(outdir_figures,"/hnhs_wo_hfps.pdf",sep=""), width=8,height=10.5)
+print(hnhs_wo_hfps_plot)
+dev.off()
+
+```
+
+
+We want to find the significance of the observed hN/hS values. 
+
+```{r}
+
+obs = obs_hNhS_ratios %>%
+  select(STRAIN, TISSUE, AGE_BIN, GENE, OBS_HNHS)
+
+
+sims = sims_hNhS_ratios %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, SIM_HNHS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE) %>% 
+  summarise(MEDIAN = median(SIM_HNHS),
+            AVG = mean(SIM_HNHS), 
+            SD = sd(SIM_HNHS), 
+            LOWER = quantile(SIM_HNHS, probs = 0.025, na.rm = T), 
+            HIGHER = quantile(SIM_HNHS, probs = 0.975, na.rm = T))
+
+merged_data = sims %>% 
+  left_join(obs, by = c("STRAIN", "TISSUE", "AGE_BIN", "GENE"))
+
+
+rm(obs, sims)
+
+```
+
+```{r}
+
+merged_data_w_sim_data = sims_hNhS_ratios %>% 
+  select(STRAIN, TISSUE, AGE_BIN, SIM_RUN, GENE, SIM_HNHS) %>%
+  left_join(merged_data, by = c("STRAIN", "TISSUE", "AGE_BIN", "GENE"))
+
+rm(sims_hNhS_ratios)
+
+```
+
+```{r}
+
+merged_data_w_sim_data = merged_data_w_sim_data %>% 
+  select(STRAIN, TISSUE, AGE_BIN, SIM_RUN, GENE, SIM_HNHS, OBS_HNHS, AVG) %>%
+  mutate(Z_SIM = SIM_HNHS - AVG, Z_OBS = OBS_HNHS - AVG)
+  
+p_values = merged_data_w_sim_data %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, OBS_HNHS, Z_SIM, Z_OBS) %>% 
+  mutate(POS_Z_OBS = abs(Z_OBS), NEG_Z_OBS = -1*POS_Z_OBS) %>% 
+  #how many data points do we have for each gene -- remember we filtered out the Infs 
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE, OBS_HNHS, Z_OBS) %>% 
+  mutate(SIM_TOTAL = n()) %>% 
+  ungroup() %>% 
+  #identify if our simulations generate values passed our obs pt in their respective upper or lower tails -- this is based on the Z_OBS sign --> greater or lower than the expected 
+  mutate(COMP_Z_OBS = ifelse(Z_OBS < 0, ifelse(NEG_Z_OBS >= Z_SIM, 1, 0), ifelse(POS_Z_OBS <= Z_SIM, 1, 0))) %>% 
+  #mutate(COMP_POS_Z_OBS = ifelse(POS_Z_OBS <= Z_SIM, 1, 0), COMP_NEG_Z_OBS = ifelse(NEG_Z_OBS >= Z_SIM, 1, 0)) %>% 
+  #we need to count how many points are more extreme than our obs value under the null
+  select(STRAIN, TISSUE, AGE_BIN, SIM_TOTAL, GENE, OBS_HNHS, Z_OBS, COMP_Z_OBS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, SIM_TOTAL, GENE, OBS_HNHS, Z_OBS) %>% 
+  #summarise(COUNT_SIMS_GREATER = sum(COMP_POS_Z_OBS), COUNT_SIMS_LOWER = sum(COMP_NEG_Z_OBS)) %>%
+  summarise(SUM_COMPARISON = sum(COMP_Z_OBS)) %>% 
+  #mutate(SUM_COMPARISON = COUNT_SIMS_GREATER + COUNT_SIMS_LOWER) %>%
+  #multiplying by 2 to create a 2-tailed test --> assuming that we have a symmetric distribution; this will allow for a stricter significance level & more reliable/conservative results
+  mutate(P_VALUE = 2*(SUM_COMPARISON/SIM_TOTAL)) %>%
+  #we need to multiple hypothesis correct
+  mutate(P_ADJ = p.adjust(P_VALUE, method="BH")) %>% 
+  na.omit() %>%
+  mutate(COLOR_LABEL = ifelse(P_ADJ < 0.01, as.character(STRAIN), "INSIG"))
+
+#want to export this table for the site by site conservation analysis 
+
+p_values %>% 
+  group_by(Z_OBS>0,P_ADJ<0.05) %>% 
+  summarize(n=n())
+```
+
+Making a summary plot! Color codes: https://www.nceas.ucsb.edu/sites/default/files/2020-04/colorPaletteCheatsheet.pdf
+
+```{r}
+
+p_values$AGE_BIN = factor(p_values$AGE_BIN, level = c( "YOUNG", "OLD"))
+
+sig_points = p_values %>% 
+  filter(P_ADJ <= 0.01) %>% 
+  mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O"))
+
+write.table(sig_points, file = paste(outdir_files,"/hNhS_wo_HFPs_sig_hits.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+
+insig_points = p_values %>% 
+  filter(P_ADJ > 0.01) %>% 
+  mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O"))
+
+summary_hNhS = ggplot(p_values %>% 
+                        mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O")))
+
+summary_hNhS = summary_hNhS + 
+  geom_point(data = insig_points, aes(x = log10(OBS_HNHS), y = GENE, shape = TISSUE, color = COLOR_LABEL), alpha = 0.9, size = 0.85) + 
+  geom_point(data = sig_points, aes(x = log10(OBS_HNHS), y = GENE, shape = TISSUE, color = COLOR_LABEL), alpha = 0.9) +
+  facet_wrap(AGE_LABEL~., strip.position = "right", ncol = 1) + 
+  xlab("log(hN/hS)") +
+  ylab("Age") + 
+  scale_color_manual(values = c("B6" = "#1d457f" , "AKR" = "#cc5c76", "ALR" = "#625a94", "FVB" = "#f57946", "NZB" = "#f7c22d", "INSIG" = "gray90")) +
+  scale_shape_manual(values = c(19, 17, 15)) + 
+  theme_bw(base_size = 16) + 
+  theme(strip.background=element_blank(),
+        strip.text.y = element_text(angle = 0), 
+        text = element_text(family = "sans"), 
+        legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank())
+
+pdf(paste(outdir_figures,"/summary_hnhs_wo_hfps.pdf",sep=""), width=6,height=6)
+print(summary_hNhS)
+dev.off()
+
+pdf(paste(outdir_figures,"/summary_hnhs_wo_hfps_leg.pdf",sep=""), width=10,height=6)
+print(summary_hNhS + theme(legend.position = "bottom"))
+dev.off()
+
+
+```
+
+
+
+
