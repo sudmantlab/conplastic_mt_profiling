@@ -1,0 +1,239 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+Comment: Script was edited on 2/10/22 by Isabel Serrano to make sure that there wasn't a redundant count of mutations that were located in multiple genes (~50 pos) in calculating the condition and sample mutation freq per position. 
+
+Script was edited on 4/26/2022 to filter out haplotype sites completely from vcf file 
+
+Script was edited on 1/25/2023 by Isabel Serrano to exclude B6_Y3_Heart, all B6 young liver, and all B6 midpoint samples from our analysis. 
+
+```{r}
+library(tidyverse)
+```
+
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/"
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files"
+
+#Note: at the haplotype sites the ref base here is the B6 ref base in this script we separate haplotype sites from all other sites that accumulate somatic muts. The haplotype_vcf contains REVERSION mutations at the haplotype sites. 
+somatic_vcf_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/somatic_mutations.vcf"
+somatic_vcf_w_sample_info = read.table(somatic_vcf_file, header=TRUE, stringsAsFactors = FALSE)
+
+#Note: in this file I corrected for the haplotype site references according to strain i.e. the strain-specific haplotype ref base are correct
+annotation_of_all_possible_variants_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/annotated_all_possible_variants.txt"
+annotation_of_all_possible_variants = read.table(annotation_of_all_possible_variants_file, header = TRUE, stringsAsFactors = FALSE)
+
+#contains the coordinates for all regions along the mt-genome
+coordinates_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/Mouse_Mt_Genome_Coordinates"
+coordinates = read.table(coordinates_file, stringsAsFactors = FALSE, sep = "\t")
+
+read_depth_at_pos_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/cleaned_read_depth_per_pos.txt"
+read_depth_at_pos = read.table(read_depth_at_pos_file, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+```  
+
+
+We edit the coordinates file so that it includes the D-loop and so that our coordinates are 0-indexed. 
+
+```{r}
+#adding the D-Loop coordinates to our file 
+coordinates[ nrow(coordinates) + 1, ] <- c("D-Loop", 15422, 16299)
+
+#adding column names to dataframe
+colnames(coordinates) <- c("GENE", "START", "END")
+
+#so things don't get wonky if the coordinates are read as strings -- also we convert our coordinates to be 0-indexed 
+coordinates$START <- as.numeric(coordinates$START) - 1
+coordinates$END <- as.numeric(coordinates$END) - 1
+
+```
+
+The issue we have is that we only annotated SNVs, so now indels will have an NA in the location identifier. Rather than re-locating all of our SNVs, we will build our own function to label gene locations and apply this function with mutate, where we can condition on whether or not the SNV is an indel and just run our custom function on indels. This issue is also extended to labelling the noncoding regions before ND1 and in labelling the D-loop (great reduction in compute power in annotating, bad foresite ugh.)
+
+Function for gene identification
+
+Edit made on 04-25-2022 by Isabel Serrano - there are positions that are between two labelled genetic regions (the case where gene_label < 1) and positions that are in overlapping gene regions (case where gene_label > 1 -- lazy fix was added here but it works out nicely with merging tables later -- no info is lost if there is a mutation present at the position). 
+
+```{r}
+
+gene_labeller = function(position){
+  gene_label = coordinates[((coordinates$START <= position) & (coordinates$END >= position)),]$GENE
+  
+  if (length(gene_label) < 1){
+    gene_label = "intergene_region"
+  }
+  
+  #in the case of the overlapping genes, assign the position to the first gene 
+  if (length(gene_label) > 1){
+    gene_label = gene_label[1]
+  }
+  
+  
+  return(gene_label)
+}
+
+```
+
+
+Need to create the annotated_variants file for merging with our somatic_vcf_w_sample_info (I know it's redundant but I didn't want to change the downstream code that much):
+
+```{r}
+
+#created the start position to be able to merge with the vcf 
+annotation_of_all_possible_variants = annotation_of_all_possible_variants %>% 
+  mutate(START = POS) 
+
+```
+
+Filtering out the haplotype sites:
+
+1) Create the haplotype_info_site df 
+
+```{r}
+
+STRAIN = c("AKR", rep("ALR", 3), rep("F", 2), rep("NZB", 91))
+
+#double checked NZB with the Ibrahim paper 
+START = c(9460, 4738, 9347, 9460, 7777, 9460, 54, 1352, 1518, 1589, 1821, 2200, 2339, 2524, 2765, 2766, 2797, 2813, 2839, 2933, 3193, 3259, 3421, 3466, 3598, 3691, 3931, 4122, 4275, 4323, 4407, 4705, 4731, 4770, 4884, 4902, 5203, 5462, 5551, 5929, 6040, 6406, 6469, 6574, 6619, 6784, 7410, 7545, 7869, 8438, 8466, 8567, 8857, 8863, 9136, 9151, 9390, 9460, 9529, 9580, 9598, 9819, 9984, 10546, 10582, 10951, 11842, 11845, 11932, 12352, 12574, 12694, 12834, 12889, 13003, 13443,13611, 13688, 13780, 13781, 13836, 13982, 14185, 14210, 14362, 14641, 14737, 15498, 15548, 15577, 15587, 15602,15656, 15916, 16016, 16267, 16271)
+
+haplotype_site_info = data.frame(STRAIN, START)
+
+```
+
+2) Filter the haplotype sites out 
+
+```{r}
+somatic_vcf_wo_haplotype_sites = anti_join(somatic_vcf_w_sample_info, haplotype_site_info, by = c("STRAIN", "START"))
+
+haplotype_sites_nonreversion_muts = semi_join(somatic_vcf_w_sample_info, haplotype_site_info, by = c("STRAIN", "START"))
+
+write.table(haplotype_sites_nonreversion_muts, file = paste(outdir_files,"/haplotype_sites_nonreversion_muts.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+```
+
+
+```{r}
+#at this point we haven't recoded F as FVB
+annotated_variants = somatic_vcf_wo_haplotype_sites %>% 
+  filter(VARIANT_TYPE == "SNV") %>% 
+  left_join(annotation_of_all_possible_variants, by = c("STRAIN", "START", "REF", "ALT")) %>% 
+  rowwise() %>%
+  mutate(GENE = ifelse(START < 2750 | START > 15288 , gene_labeller(START), GENE)) %>%
+  mutate(ANNOTATION = ifelse(START < 2750 | START > 15288 , "non_coding_transcript_exon_variant", ANNOTATION)) %>% 
+  select(SAMPLE, START, END, REF, ALT, ANNOTATION, GENE, CODON_INDEX, CODON_POS, REF_AA, ALT_AA) %>% 
+  ungroup()
+  
+
+```
+
+NOTE: We only annotated SNVs so indels will not have an annotation with it. 
+
+```{r}
+annotated_somatic_vcf = somatic_vcf_wo_haplotype_sites %>% 
+  mutate(STRAIN = recode(STRAIN, "F" = "FVB")) %>%
+  left_join(annotated_variants, by = c("SAMPLE", "START", "REF", "ALT")) %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, VARIANT_TYPE, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS, ANNOTATION, GENE, CODON_INDEX, CODON_POS, REF_AA, ALT_AA) %>%
+  mutate(ANNOTATION = ifelse(VARIANT_TYPE != "SNV", "INDEL", ANNOTATION))
+```
+
+
+Now using our gene_labeller to locate the indels in our vcf 
+rowwise was the savior in letting us apply the custom function in mutate 
+
+NOTE: there's 8 positions that still have an NA because these are gaps between regions in our coordinates file, but I don't want to fiddle with the coordinates file and this is how it is in the map soooo. 
+```{r}
+annotated_somatic_vcf = annotated_somatic_vcf %>%
+  rowwise() %>%
+  mutate(GENE = ifelse(VARIANT_TYPE != "SNV", gene_labeller(START), GENE)) %>%
+  ungroup()
+```
+
+~~ everything below here was edited on 04-22-2022 ~~~ 
+Before we start calculating any frequencies we want to merge the annotated_somatic_vcf with the read_depth_per position to make sure we integrate data of depth at ALL positions
+
+```{r}
+
+#filter out the mid time point and recode F as FVB to be able to merge
+processed_read_depth_at_pos = read_depth_at_pos %>% 
+  mutate(STRAIN = recode(STRAIN, "F" = "FVB")) %>% 
+  rowwise() %>%
+  mutate(GENE = gene_labeller(START))
+```
+
+```{r}
+rm(read_depth_at_pos, coordinates, somatic_vcf_w_sample_info)
+```
+
+
+```{r}
+merged_data = processed_read_depth_at_pos %>% 
+  ungroup() %>% 
+  full_join(annotated_somatic_vcf, by = c("SAMPLE", "STRAIN", "TISSUE", "AGE_BIN", "GENE", "START", "REF")) %>% 
+  #if there isn't a mutation present, then just make alt the ref allele
+  mutate(ALT = ifelse(is.na(ALT), REF, ALT)) %>% 
+  #if there isn't a mutation present, still record the read depth at this position -- read_depth_at_pos is from our somatic vcf file so it will only have an NA if there wasn't a mutation present
+  mutate(READ_DEPTH_AT_POS = ifelse(is.na(READ_DEPTH_AT_POS), DEPTH, READ_DEPTH_AT_POS)) %>% 
+  #alt allele depth will only be NA if there isn't a mutation present, thus make the mut count 0
+  mutate(ALT_ALLELE_DEPTH = ifelse(is.na(ALT_ALLELE_DEPTH), 0, ALT_ALLELE_DEPTH)) %>% 
+  #adding info to these fields so that we don't filter them out in downstream processes
+  mutate(ANNOTATION = ifelse(START < 2750 | START > 15288 , "non_coding_transcript_exon_variant", ANNOTATION)) %>%
+  mutate(ANNOTATION = ifelse(is.na(ANNOTATION), "no_mutation", ANNOTATION), 
+         VARIANT_TYPE = ifelse(is.na(VARIANT_TYPE), "no_mutation", VARIANT_TYPE)) 
+
+```
+
+We calculate the mutation frequency for each mutation type at each position. (E.g. mut freq for C>A,G,T at pos 3 if all three mutation exist at this position). There will be a lot of 0s since not that many positions have a mutation present. 
+
+01/25/2023: at this point, let's filter our the samples we want to exclude -- double checked expected dimensions to ensure that we filtered out the correct data
+
+```{r}
+filtered_merged_data = merged_data %>%
+  filter(SAMPLE != "B6_Y3_Heart") %>%
+  filter(SAMPLE != "B6_Y5_Liver", SAMPLE != "B6_Y6_Liver", SAMPLE != "B6_Y7_Liver", SAMPLE != "B6_Y8_Liver") %>% 
+  filter(AGE_BIN != "MID") %>% 
+  mutate(MUT_TYPE_MUT_FREQ_AT_POS = ALT_ALLELE_DEPTH/READ_DEPTH_AT_POS) 
+```
+
+We need to include the first round of select and unique to avoid double counting positions that are located in overlapping genes (~50 bp)
+What we calculate is the mutation frequency at each position taking into account that multiple mutations can occur at one position. 
+
+```{r}
+sample_mut_freq_per_pos = filtered_merged_data %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>% 
+  #to eliminate redundancy for positions that are in overlapping gene regions
+  unique() %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  group_by(SAMPLE, STRAIN, TISSUE, AGE_BIN, START) %>%
+  mutate(SAMPLE_MUT_COUNT_AT_POS = sum(ALT_ALLELE_DEPTH)) %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, SAMPLE_MUT_COUNT_AT_POS, READ_DEPTH_AT_POS) %>%
+  unique() %>%
+  mutate(SAMPLE_MUT_FREQ_AT_POS = SAMPLE_MUT_COUNT_AT_POS/READ_DEPTH_AT_POS)
+```
+
+```{r}
+condition_mut_freq_per_pos = sample_mut_freq_per_pos %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, SAMPLE_MUT_COUNT_AT_POS, READ_DEPTH_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, START) %>%
+  summarise(TOTAL_MUTS_AT_POS = sum(SAMPLE_MUT_COUNT_AT_POS), TOTAL_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>%
+  mutate(CONDITION_MUT_FREQ_AT_POS = TOTAL_MUTS_AT_POS/TOTAL_READ_DEPTH_AT_POS) %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, CONDITION_MUT_FREQ_AT_POS)
+
+sample_mut_freq_per_pos = sample_mut_freq_per_pos %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, SAMPLE_MUT_FREQ_AT_POS)
+
+```
+
+MERGING INTO THE SUPERTABLE YAYAYAYAY!!
+
+```{r}
+supertable = filtered_merged_data %>% 
+  left_join(sample_mut_freq_per_pos, by = c("SAMPLE", "STRAIN", "TISSUE", "AGE_BIN", "START")) %>%
+  left_join(condition_mut_freq_per_pos, by = c("STRAIN", "TISSUE", "AGE_BIN", "START")) %>%
+  mutate(HFP_THRESHOLD = 1e-3)
+
+write.table(supertable, file = paste(outdir_files,"/supertable.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+```
+
