@@ -1,0 +1,229 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/checking_NUMT")
+
+outdir_figures = "figures/"
+outdir_files = "files/"
+
+read_depth_file = "files/NZB_remapping_merged_read_depth.txt" 
+read_depth = read.table(read_depth_file, header = FALSE, stringsAsFactors = FALSE)
+
+#this file contains the read depth in the NUMT region 
+supertable_file = "../input_files/supertable.txt"
+supertable = read.table(supertable_file, header = TRUE, stringsAsFactors = FALSE)
+
+```
+
+Calculating the average read depth in the chrM region that mimics the NUMT 
+
+```{r}
+#filter for only NZB since our anchors are in NZB
+average_depth_chrM_NUMT_region = supertable %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS) %>% 
+  unique() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, START) %>% 
+  #aggregating the read depth across samples
+  summarise(COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>%
+  #filtering for just the NUMT region 
+  filter(START >= 6394 & START <= 11042) %>%
+  ungroup() %>%
+  #calculating the average read depth in the chrM NUMT region
+  select(STRAIN, TISSUE, AGE_BIN, COND_READ_DEPTH_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN) %>% 
+  summarise(AVG_READ_DEPTH = mean(COND_READ_DEPTH_AT_POS)) %>% 
+  filter(STRAIN == "NZB")
+
+```
+
+```{r}
+rm(supertable)
+```
+
+Aggregating our sample information for the read depth at the chr1 NUMT and chrM region 
+
+```{r}
+
+colnames(read_depth) = c("CHRM", "START", "DEPTH", "FILENAME")
+
+read_depth = read_depth %>%
+  separate(FILENAME, c("STRAIN", "AGE", "TISSUE"), sep = "_", extra = "drop", fill = "right")
+```
+
+```{r}
+#this file contains the read depth for reads mapped to the NZB ref genome and chr1 NUMT and underwent a strict filter for quality and high matches 
+read_depth = read_depth %>% 
+  mutate(CHRM = ifelse(CHRM == "NZB_chrM", "chrM", CHRM)) %>% 
+  mutate(AGE_BIN = ifelse(grepl("O", AGE), "OLD", "YOUNG")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, CHRM, START, DEPTH) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, CHRM, START) %>% 
+  summarise(COND_DEPTH = sum(DEPTH)) 
+
+```
+
+Creating a column that labels our anchor points -- this will be super hard coded :/  
+
+```{r}
+#63 bp apart 
+chr1_anchor_end_1 = 24616171 + 10
+chr1_anchor_start_1 = 24616108 - 10
+
+#45 bp apart 
+chr1_anchor_end_2 = 24616003 + 10
+chr1_anchor_start_2 = 24615958 - 10
+
+#36 bp apart 
+chr1_anchor_start_3 = 24611996 - 10
+chr1_anchor_end_3 = 24612032 + 10
+
+#spans 208 bp but has multiple haplotype sites in this region
+chr1_anchor_start_4 = 24612980 - 10
+chr1_anchor_end_4 = 24613188 + 10
+
+#15 bp apart 
+chr1_anchor_start_5 = 24613427 - 10
+chr1_anchor_end_5 = 24613442 + 10
+
+#6 bp apart 
+chr1_anchor_start_6 = 24613715 - 10
+chr1_anchor_end_6 = 24613721 + 10
+
+
+#Finding these anchor points in chrM
+chrM_anchor_start_1 = 6407 - 10
+chrM_anchor_end_1 = 6470 + 10
+
+chrM_anchor_start_2 = 6575 - 10
+chrM_anchor_end_2 = 6620 + 10
+
+#36 bp apart 
+chrM_anchor_end_3 = 10583 + 10
+chrM_anchor_start_3 = 10547 - 10
+
+#208 bp apart 
+chrM_anchor_end_4 = 9599 + 10
+chrM_anchor_start_4 = 9391 - 10
+
+#15 bp apart
+chrM_anchor_end_5 = 9152 + 10
+chrM_anchor_start_5 = 9137 - 10
+
+#6 bp apart
+chrM_anchor_end_6 = 8864 + 10
+chrM_anchor_start_6 = 8858 - 10
+  
+  
+```
+
+```{r}
+  
+
+anchor_points_id = function(position){
+  if(position > chr1_anchor_start_1 & position < chr1_anchor_end_1) {label = "chr1_anchor_1"}
+  else if (position > chr1_anchor_start_2 & position < chr1_anchor_end_2) {label = "chr1_anchor_2"}
+  else if (position > chr1_anchor_start_3 & position < chr1_anchor_end_3) {label = "chr1_anchor_3"}
+  else if (position > chr1_anchor_start_4 & position < chr1_anchor_end_4) {label = "chr1_anchor_4"}
+  else if (position > chr1_anchor_start_5 & position < chr1_anchor_end_5) {label = "chr1_anchor_5"}
+  else if (position > chr1_anchor_start_6 & position < chr1_anchor_end_6) {label = "chr1_anchor_6"}
+  else if (position > chrM_anchor_start_1 & position < chrM_anchor_end_1) {label = "chrM_anchor_1"}
+  else if (position > chrM_anchor_start_2 & position < chrM_anchor_end_2) {label = "chrM_anchor_2"}
+  else if (position > chrM_anchor_start_3 & position < chrM_anchor_end_3) {label = "chrM_anchor_3"}
+  else if (position > chrM_anchor_start_4 & position < chrM_anchor_end_4) {label = "chrM_anchor_4"}
+  else if (position > chrM_anchor_start_5 & position < chrM_anchor_end_5) {label = "chrM_anchor_5"}
+  else if (position > chrM_anchor_start_6 & position < chrM_anchor_end_6) {label = "chrM_anchor_6"}
+  else {label = "not_anchor"}
+}
+
+```
+
+```{r}
+labeled_read_depth = read_depth %>% 
+  rowwise() %>% 
+  mutate(ANCHOR = anchor_points_id(START))
+
+```
+
+
+```{r}
+
+anchor_points_depth = labeled_read_depth %>% 
+  ungroup() %>% 
+  filter(ANCHOR != "not_anchor") %>% 
+  select(STRAIN, TISSUE, AGE_BIN, CHRM, ANCHOR, COND_DEPTH) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, CHRM, ANCHOR) %>%
+  summarise(AVG_READ_DEPTH_AT_ANCHOR = mean(COND_DEPTH))
+
+```
+
+Now to merge the average read depth for the NUMT region in chr1 and chrM
+
+```{r}
+
+cont_est_anchor_pts = anchor_points_depth %>% 
+  left_join(average_depth_chrM_NUMT_region, by = c("STRAIN", "TISSUE", "AGE_BIN")) %>% 
+  mutate(CONT_EST = AVG_READ_DEPTH_AT_ANCHOR/AVG_READ_DEPTH) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, CHRM, ANCHOR, CONT_EST)
+```
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/checking_NUMT")
+
+#this file contains the prop of reads mapped to the junctions without strict filtering
+junction_prop_file = "files/cons_junction_cont_est.txt"
+junction_prop = read.table(junction_prop_file, header = TRUE, stringsAsFactors = FALSE)
+
+```
+
+```{r}
+
+plotting_junctions = junction_prop %>% 
+  filter(STRAIN == "NZB") %>% 
+  mutate(X_LABEL = paste0(TISSUE, "_", AGE_BIN))
+```
+
+```{r}
+plotting_cont_anchors = cont_est_anchor_pts %>% 
+  mutate(X_LABEL = paste0(TISSUE, "_", AGE_BIN))
+```
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/checking_NUMT")
+
+comparison_NZBanchors_NZBjunction = ggplot(plotting_cont_anchors) + 
+  geom_boxplot(aes(x = X_LABEL, y = CONT_EST, color = CHRM)) + 
+  geom_point(data = plotting_junctions, aes(x = X_LABEL, y = JUNCTION_BEFORE), color = "#990033", size = 0.7) + 
+  geom_point(data = plotting_junctions, aes(x = X_LABEL, y = JUNCTION_AFTER), color = "#990033", size = 0.8) + 
+  scale_y_log10() + 
+  xlab("Condition") + 
+  ylab("Proportion of Reads Mapped \n(Haploptype Sites: chrM)") + 
+  scale_color_manual(name = "Chromosome", values = c("cornflowerblue", "black")) +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 6),
+        text = element_text(family = "sans"),
+        axis.title.x = element_text(size = 8.25),
+        axis.title.y = element_text(size = 8),
+        axis.text.y=element_text(size = 6.5), 
+        legend.position = "None")
+
+
+pdf(paste(outdir_figures,"/comparison_NZBanchors_NZBjunction.pdf",sep=""),width=3.25,height=3)
+print(comparison_NZBanchors_NZBjunction)
+dev.off()
+
+pdf(paste(outdir_figures,"/leg_comparison_NZBanchors_NZBjunction.pdf",sep=""),width=3.5,height=3.5)
+print(comparison_NZBanchors_NZBjunction + theme(legend.position = "left"))
+dev.off()
+
+
+```

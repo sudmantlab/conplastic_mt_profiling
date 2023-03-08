@@ -1,0 +1,197 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/figures/"
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/files/"
+
+nonreversion_muts_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/somatic_mutations.vcf"
+nonreversion_muts = read.table(nonreversion_muts_file, header=TRUE, stringsAsFactors = FALSE)
+
+reversion_muts_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/haplotype_mutations.vcf"
+reversion_muts = read.table(reversion_muts_file, header=TRUE, stringsAsFactors = FALSE)
+```
+
+Combine all our variants info: 
+```{r}
+all_variants = rbind(nonreversion_muts, reversion_muts)
+```
+
+```{r}
+rm(nonreversion_muts, reversion_muts)
+```
+
+
+```{r}
+nd3_hap_site = all_variants %>% 
+  select(SAMPLE, STRAIN, TISSUE, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  filter(START == 9460, REF == "T", ALT == "C") %>% 
+  mutate(MUT_FREQ = ALT_ALLELE_DEPTH / READ_DEPTH_AT_POS) 
+
+nd3_hap_site %>%
+  filter(STRAIN == "B6", TISSUE == "Heart")
+
+```
+
+```{r}
+
+nd3_site_plot = ggplot(nd3_hap_site, aes(x = SAMPLE, y = MUT_FREQ, color = STRAIN, shape = TISSUE)) 
+
+nd3_site_plot = nd3_site_plot + 
+  geom_point() + 
+  theme_bw() + 
+  ylab("Mutation\n Frequency") + 
+  xlab("Sample") + 
+  scale_color_manual(values = c("B6"= "#1d457f","AKR" = "#cc5c76", "ALR" = "#2f9e23", "F" = "#f57946", "NZB" = "#f7c22d")) +
+  theme(strip.background=element_blank(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 90, size = 6),
+        legend.position = "bottom")
+
+pdf(paste(outdir_figures,"/nd3_hap_site_freq.pdf",sep=""),width=9,height=3)
+print(nd3_site_plot)
+dev.off()
+
+
+```
+
+```{r}
+
+alr_hap_sites = all_variants %>% 
+  select(SAMPLE, STRAIN, TISSUE, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  filter((START == 4738 & REF == "C" & ALT == "A") | (START == 9347 & REF == "G" & ALT == "A")) %>% 
+  mutate(MUT_FREQ = ALT_ALLELE_DEPTH / READ_DEPTH_AT_POS) 
+
+alr_hap_sites %>%
+  filter(STRAIN == "B6")
+
+```
+
+```{r}
+
+alr_hap_sites_plot = ggplot(alr_hap_sites, aes(x = SAMPLE, y = MUT_FREQ, color = STRAIN, shape = TISSUE)) 
+
+alr_hap_sites_plot = alr_hap_sites_plot + 
+  geom_point() + 
+  theme_bw() + 
+  facet_wrap(~START) + 
+  ylab("Mutation\n Frequency") + 
+  xlab("Sample") + 
+  scale_color_manual(values = c("B6"= "#1d457f","AKR" = "#cc5c76", "ALR" = "#2f9e23", "F" = "#f57946", "NZB" = "#f7c22d")) +
+  theme(strip.background=element_blank(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 90, size = 6),
+        legend.position = "bottom")
+
+pdf(paste(outdir_figures,"/alr_hapsites_freq.pdf",sep=""),width=9,height=3)
+print(alr_hap_sites_plot)
+dev.off()
+
+```
+
+```{r}
+
+fvb_hap_sites = all_variants %>% 
+  select(SAMPLE, STRAIN, TISSUE, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  filter(START == 7777 & REF == "G" & ALT == "T") %>% 
+  mutate(MUT_FREQ = ALT_ALLELE_DEPTH / READ_DEPTH_AT_POS) 
+
+fvb_hap_sites %>%
+  filter(STRAIN == "B6")
+
+
+```
+
+```{r}
+
+fvb_hap_sites_plot = ggplot(fvb_hap_sites, aes(x = SAMPLE, y = MUT_FREQ, color = STRAIN, shape = TISSUE)) 
+
+fvb_hap_sites_plot = fvb_hap_sites_plot + 
+  geom_point() + 
+  theme_bw() + 
+  facet_wrap(~START) + 
+  ylab("Mutation\n Frequency") + 
+  xlab("Sample") + 
+  scale_color_manual(values = c("B6"= "#1d457f","AKR" = "#cc5c76", "ALR" = "#2f9e23", "F" = "#f57946", "NZB" = "#f7c22d")) +
+  theme(strip.background=element_blank(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 90, size = 6),
+        legend.position = "bottom")
+
+
+pdf(paste(outdir_figures,"/fvb_hapsites_freq.pdf",sep=""),width=9,height=3)
+print(fvb_hap_sites_plot)
+dev.off()
+
+```
+
+```{r}
+
+akr_het_site = all_variants %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  filter(START > 5165, START < 5175 ) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, SAMPLE, START, READ_DEPTH_AT_POS) %>% 
+  summarise(SUM_ALT = sum(ALT_ALLELE_DEPTH)) %>% 
+  mutate(MUT_FREQ = SUM_ALT / READ_DEPTH_AT_POS) 
+
+
+akr_het_site
+```
+
+```{r}
+library(PNWColors)
+bay_pal <- pnw_palette(name="Bay", type="discrete")
+
+akr_het_site_plot = ggplot(akr_het_site, aes(x = START, y = MUT_FREQ, shape = AGE_BIN)) 
+
+akr_het_site_plot = akr_het_site_plot + 
+  geom_point(aes(color = TISSUE)) + 
+  scale_shape_manual(values = c(4, 19, 1)) + 
+  theme_bw() + 
+  facet_wrap(~STRAIN, nrow = 1) + 
+  ylab("Mutation\n Frequency") + 
+  xlab("Position (bp)") + 
+  scale_color_manual(name = "Tissue" , values = bay_pal[c(1,5,4)]) +
+  theme(strip.background=element_blank(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 90, size = 6),
+        legend.position = "bottom")
+
+
+pdf(paste(outdir_figures,"/akr_hapsites_freq.pdf",sep=""),width=9,height=3)
+print(akr_het_site_plot)
+dev.off()
+```
+
+```{r}
+
+#all of the NZB haplotypes are called except for the two indels and the heteroplasmy at 7475 because it's max freq is 0.8
+
+all_variants %>%
+  filter(STRAIN == "NZB") %>%
+  mutate(MUT_FREQ = ALT_ALLELE_DEPTH / READ_DEPTH_AT_POS) %>%
+  filter(MUT_FREQ > 0.9) %>%
+  select(START) %>%
+  unique()
+
+```
+
+```{r}
+#we call all the  haplosites and unfortunately also call it for B6 at ND3
+all_variants %>%
+  mutate(MUT_FREQ = ALT_ALLELE_DEPTH / READ_DEPTH_AT_POS) %>%
+  filter(MUT_FREQ > 0.95) %>%
+  select(STRAIN, START) %>%
+  unique()
+
+```
