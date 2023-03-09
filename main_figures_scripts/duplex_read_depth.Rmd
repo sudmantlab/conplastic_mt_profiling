@@ -16,6 +16,8 @@ library(ggbeeswarm)
 
 outdir_figures <- "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/figures"
 
+outdir_files <- "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/files"
+
 supertable_file <-"~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
 
 supertable <- read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
@@ -120,6 +122,18 @@ print(beeswarm_fig)
 dev.off()
                         
                       
+```
+
+Writing out files:
+1) Sample duplex depth
+2) Condition duplex depth 
+
+```{r}
+
+write.table(sample_depth, file = paste(outdir_files,"/sample_duplex_depth.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+write.table(cond_depth, file = paste(outdir_files,"/experimental_condition_duplex_depth.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
 ```
 
 ~~~~~~SCRATCH CODE~~~~~~~~~~

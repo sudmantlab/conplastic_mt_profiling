@@ -15,6 +15,8 @@ Recall, the supertable file has the read depth at every position (0-indexed) and
 ```{r} 
 outdir_figures = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/figures"
 
+outdir_files <- "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/files"
+
 supertable_file = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
 
 supertable = read.table(supertable_file, header = TRUE, stringsAsFactors = FALSE)
@@ -120,5 +122,16 @@ cond_som_mut_count = ggplot(condition_som_mut_count) +
 pdf(paste(outdir_figures, "/cond_raw_som_mut_count.pdf", sep = ""), width = 2.35, height = 4)
 print(cond_som_mut_count)
 dev.off()
+
+```
+
+Writing out files:
+1) sample somatic mutation count
+2) condition somatic mutation count
+
+```{r}
+write.table(sample_somatic_mut_count %>% select(SAMPLE, STRAIN, TISSUE, AGE_BIN, RAW_SOMATIC_MUT_COUNT), file = paste(outdir_files,"/sample_somatic_mut_count.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+write.table(condition_som_mut_count %>% select(STRAIN, TISSUE, AGE_BIN, COND_SOM_MUT_COUNT), file = paste(outdir_files,"/experimental_condition_somatic_mut_count.txt", sep = ""), sep = "\t", quote = F, row.names = F)
 
 ```
