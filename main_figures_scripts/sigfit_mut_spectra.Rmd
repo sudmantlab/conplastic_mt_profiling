@@ -80,6 +80,13 @@ matrix_counts = as.matrix(counts_per_cond_df)
 
 ```
 
+Writing out the mutation type count matrix that is used as input for sigfit
+
+```{r}
+write.table(counts_per_cond, file = paste(outdir_files,"/sigfit_mut_counts_input.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
 
 ```{r}
 rm(supertable)

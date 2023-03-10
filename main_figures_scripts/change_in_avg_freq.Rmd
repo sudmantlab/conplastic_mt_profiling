@@ -121,6 +121,12 @@ mutations_wo_hfps_analysis = total_mutation_count_wo_hfps %>%
 mutations_wo_hfps_analysis$STRAIN = factor(mutations_wo_hfps_analysis$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
 ```
 
+```{r}
+
+write.table(mutations_wo_hfps_analysis, file = paste(outdir_files,"/avg_mut_freq_wo_hfps.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
 Calculating the average fold change between young and old and also the average fold change across tissues
 
 ```{r}
