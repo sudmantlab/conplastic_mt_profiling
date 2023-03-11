@@ -1,0 +1,117 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+
+```{r}
+
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/reversions/")
+outdir_figures = "figures/"
+outdir_files = "files/"
+
+#this file contains REVERSION haplotype sites (ALT > B6 REF) wihtout any correction for NUMT contamination
+haplotype_reversions_file = "../input_files/haplotype_mutations.vcf" 
+haplotype_reversions = read.table(haplotype_reversions_file, header = TRUE, stringsAsFactors = FALSE)
+
+#this file contains the estimated chr1 NUMT contamination 
+NUMT_mapping_prop_file = "../checking_NUMT/files/cons_junction_cont_est.txt"
+NUMT_mapping_prop = read.table(NUMT_mapping_prop_file, header = TRUE, stringsAsFactors = FALSE)
+```
+
+
+We need to label positions that are in the NUMT region in our haplotype reversion file -- we will implement the correction for all positions in the NUMT regardless if it's a haplotype position or not 
+
+```{r}
+cond_haplotype_reversions = haplotype_reversions %>% 
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN)) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, REF_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, START) %>% 
+  summarise(COND_REV_ALLELE_DEPTH = sum(REF_ALLELE_DEPTH), COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS))
+
+```
+
+```{r}
+#building our labeller 
+
+NUMT_labeler = function(position) {
+  #remember we are in 0-indexed coords
+  start = 6393
+  end = 11041
+  
+ if(position >= start & position <= end) {
+   label = "NUMT"}
+ else{label = "NOT_NUMT"}
+
+ return(label)
+}
+
+```
+
+Labeling our NUMT region 
+```{r}
+
+labeled_positions = cond_haplotype_reversions %>% 
+  rowwise() %>% 
+  mutate(REGION = NUMT_labeler(START))
+
+```
+
+```{r}
+NUMT_mapping_prop = NUMT_mapping_prop %>% 
+  mutate(REGION = "NUMT") %>% 
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN)) 
+
+NUMT_contamination = NUMT_mapping_prop %>%
+  filter(CHRM == "chr1") %>% 
+  #let's choose our contamination perc == max(JUNCTION_BEFORE, JUNCTION_AFTER)
+  select(STRAIN, TISSUE, AGE_BIN, REGION, JUNCTION_BEFORE, JUNCTION_AFTER) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, REGION) %>% 
+  mutate(CONT_PERC = max(JUNCTION_BEFORE, JUNCTION_AFTER))
+```
+
+
+Merging our mut_freq info with our contamination info 
+
+
+```{r}
+
+merged_df = labeled_positions %>%
+  left_join(NUMT_contamination, by = c("STRAIN", "TISSUE", "AGE_BIN", "REGION")) %>% 
+  mutate(CONT_PERC = ifelse(is.na(CONT_PERC), 0, CONT_PERC)) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, COND_REV_ALLELE_DEPTH, COND_READ_DEPTH_AT_POS, CONT_PERC)
+
+```
+
+```{r}
+rm(NUMT_contamination, haplotype_reversions, labeled_positions)
+```
+
+Now calculating our correction factor 
+We assume that every read that comes from chr1 contains the B6 allele; thus, we subtract the # of reads that we calculate as coming from ch1 from both the read depth and the allele depth 
+
+```{r}
+
+NUMT_corrected_mut_freq = merged_df %>%
+  mutate(EST_READS_MAPPED_TO_CHRM1 = COND_READ_DEPTH_AT_POS *CONT_PERC) %>%
+  mutate(CORR_READ_DEPTH = COND_READ_DEPTH_AT_POS - EST_READS_MAPPED_TO_CHRM1,
+         CORR_REV_ALLELE_DEPTH = COND_REV_ALLELE_DEPTH - EST_READS_MAPPED_TO_CHRM1) %>%
+  mutate(FLOORED_CORR_REV_ALLELE_DEPTH = ifelse(CORR_REV_ALLELE_DEPTH < 0, 0, CORR_REV_ALLELE_DEPTH))
+
+```
+
+Writing this file out for future analyses
+
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/reversions/")
+
+write.table(NUMT_corrected_mut_freq, file = paste(outdir_files,"corrected_reversion_counts.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+
+```
