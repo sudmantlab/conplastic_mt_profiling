@@ -1,0 +1,283 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/")
+
+outdir_figures = "figures/"
+outdir_files = "files/"
+
+#summary files that we use to create the figure
+serrano_summary_mutfreqs_file = "files/serrano_summary_de_novo_mut_freqs.txt"
+
+sc_summary_mutfreqs_file = "files/sc_summary_de_novo_mut_freqs.txt"
+
+#files that we use for our t-test comparisons -- includes the mutation frequency per sample
+serrano_mutfreqs_file = "files/serrano_de_novo_mut_freqs.txt"
+sc_mutfreqs_file = "files/sc_de_novo_mut_freqs.txt"
+
+#note specifying the delimeter eliminates the rows with ## or # in the entry -- the headers that were not filtered out because these 3 files had 2 more header lines than the other files 
+serrano_summary_mutfreqs = read.table(serrano_summary_mutfreqs_file, sep = '\t', header = TRUE)
+sc_summary_mutfreqs = read.table(sc_summary_mutfreqs_file, sep = '\t', header = TRUE)
+
+serrano_mutfreqs = read.table(serrano_mutfreqs_file, sep = '\t', header = TRUE)
+sc_mutfreqs = read.table(sc_mutfreqs_file, sep = '\t', header = TRUE)
+
+```
+Creating our figure: 
+
+```{r}
+sc_study = sc_summary_mutfreqs %>%
+  ungroup() %>%
+  #we only compare the tissues that are also included in our study
+  filter(Tissue == "L" | Tissue == "He" | Tissue == "C") %>%
+  select(Tissue, AGE_BIN, MUT_TYPE, AVG, SE) %>%
+  mutate(Study = "Sanchez-Contreras") %>%
+  mutate(Tissue_Label = recode(Tissue, C = "WB/Cere", He = "Heart", L = "Liver")) %>%
+  mutate(Age_Label = ifelse(AGE_BIN == "OLD", "Old", "Young")) %>%
+  select(Tissue_Label, Age_Label, MUT_TYPE, AVG, SE, Study)
+```
+
+```{r}
+
+serrano_df = serrano_summary_mutfreqs %>%
+  #we only compare across B6 ancestry, which is what SC have in their study
+  filter(STRAIN == "B6") %>%
+  select(TISSUE, AGE_BIN, MUT_TYPE, AVG, SE) %>% 
+  mutate(Study = "Serrano") %>%
+  #recoding the brain label to match that of SC
+  mutate(Tissue_Label = recode(TISSUE, Brain = "WB/Cere")) %>%
+  mutate(Age_Label = ifelse(AGE_BIN == "OLD", "Old", "Young")) %>%
+  select(Tissue_Label, Age_Label, MUT_TYPE, AVG, SE, Study)
+
+```
+
+Merging our datasets to plot study comparisons
+
+```{r}
+comp_df = serrano_df %>% 
+  rbind(sc_study)
+
+comp_df$MUT_TYPE = factor(comp_df$MUT_TYPE, level = c("G>A","C>T", "G>C", "C>G", "G>T", "C>A", "T>A", "A>T", "T>C", "A>G", "T>G", "A>C"))
+comp_df$Age_Label = factor(comp_df$Age_Label, level = c("Young", "Old"))
+comp_df$Tissue_Label = factor(comp_df$Tissue_Label, level = c("Heart", "Liver", "WB/Cere"))
+```
+
+Plotting our frequencies against each other
+
+```{r}
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/")
+
+study_freq_comp = ggplot(comp_df, aes(x = MUT_TYPE, y = AVG, fill = Study)) 
+
+study_freq_comp = study_freq_comp + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_errorbar(aes(ymin=AVG-SE, ymax=AVG+SE), width=.2,
+                 position=position_dodge(.9)) +
+  facet_grid(Tissue_Label ~ Age_Label, scales = "free_y") +
+  theme_bw(base_size = 12) + 
+  xlab("Mutation Type") + 
+  ylab("Mutation frequency") + 
+  scale_fill_manual(values = c("#A9A9A9","#9F2B68")) +
+  theme(axis.text.x = element_text(angle = 90), 
+        strip.background = element_blank(),
+        legend.position = "bottom")
+  
+
+pdf(paste(outdir_figures,"/study_comp_freqs.pdf", sep=""),width=6,height=4)
+print(study_freq_comp)
+dev.off()
+
+```
+
+Now statistically testing if there's a difference between our mutation frequencies: 
+
+Heart, Liver, and Cere for each mutation type
+
+```{r}
+
+serrano_t_df = serrano_mutfreqs %>%
+  filter(STRAIN == "B6") %>%
+  mutate(LABEL = paste(TISSUE, AGE_BIN, sep = "_")) %>% 
+  select(LABEL, MUT_TYPE, MUT_FREQ)
+
+```
+
+```{r}
+sc_t_df = sc_mutfreqs %>%
+  filter(Tissue == "He" | Tissue == "L" | Tissue == "C") %>%
+  mutate(TISSUE = recode(Tissue, "He" = "Heart", "L" = "Liver", "C" = "Brain")) %>% 
+  mutate(LABEL = paste(TISSUE, AGE_BIN, sep = "_")) %>% 
+  #filter our young liver, since we do not have this condition in our study
+  filter(LABEL != "Liver_YOUNG") %>% 
+  select(LABEL, MUT_TYPE, MUT_FREQ)
+```
+
+The lists that we will be iterating through: 
+
+```{r}
+COND_LABEL = unique(serrano_t_df$LABEL)
+MUT_TYPE = unique(serrano_t_df$MUT_TYPE)
+```
+
+Now to loop through our dataframes and run a t-test on all mutation type combinations 
+
+```{r}
+#initialize t-test results df 
+t_output = data.frame(CONDITION = character(),
+                      MUT_TYPE = character(),
+                      P_VAL = numeric(),
+                      STAT = numeric()
+)
+
+#we want to loop through the label (tissue x age combination)
+for(label in COND_LABEL){
+  
+#filter df based on the label 
+  serrano_cond_df = serrano_t_df %>%
+    filter(LABEL == label)
+  
+    sc_cond_df = sc_t_df %>%
+    filter(LABEL == label)
+  
+#we want to loop through the mutation types
+    
+    for(type in MUT_TYPE){
+      
+      #create vectors of the frequencies for the corresponding mutation type
+      serrano_entries = serrano_cond_df[serrano_cond_df$MUT_TYPE == type,]$MUT_FREQ
+      sc_entries = sc_cond_df[sc_cond_df$MUT_TYPE == type,]$MUT_FREQ
+      
+      #now run a t-test
+      t_test_results = t.test(serrano_entries, sc_entries)
+      
+      pval = t_test_results$p.value
+      stat = t_test_results$statistic
+    
+    #save the condition label, the mutation pair label, p-value, and statistic
+    output_results = c(label, type, pval, stat)
+    
+    #save results onto new row of the output table 
+    t_output[nrow(t_output) + 1,] = output_results
+}}
+
+```
+
+Correcting for multiple hypothesis testing
+
+```{r}
+adj_t_output = t_output %>%
+  mutate(P_ADJ = p.adjust(P_VAL, method="BH")) %>%
+  arrange(P_ADJ)
+```
+
+Exporting the t-test results
+```{r}
+
+outdir_files ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/"  
+
+#exporting our strand bias fishers exact test 
+write.table(adj_t_output, file = paste(outdir_files,"/serrano_v_sc_t_test.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+Testing our results -- all clear! 
+```{r}
+
+serrano_test_cond = serrano_t_df %>%
+    filter(LABEL == "Heart_YOUNG")
+
+sc_test_cond = sc_t_df %>%
+    filter(LABEL == "Heart_YOUNG")
+
+
+serrano_test = serrano_test_cond[serrano_test_cond$MUT_TYPE == "G>T",]$MUT_FREQ
+sc_test = sc_test_cond[sc_test_cond$MUT_TYPE == "G>T",]$MUT_FREQ
+
+t.test(serrano_test, sc_test)
+
+```
+
+Lastly, we want to compare the asymmetry between our studies
+
+```{r}
+
+serrano_assym = serrano_mutfreqs %>%
+  filter(STRAIN == "B6") %>%
+  mutate(COL_LABELS = recode(MUT_TYPE, "G>A" = "G_A", "C>T" = "C_T")) %>%
+  filter(MUT_TYPE == "G>A" | MUT_TYPE == "C>T") %>%
+  select(SAMPLE, TISSUE, AGE_BIN, COL_LABELS, MUT_FREQ) %>% 
+  pivot_wider(names_from = COL_LABELS, values_from = MUT_FREQ) %>%
+  mutate(RATIO = G_A/C_T) %>%
+  ungroup() %>%
+  select(TISSUE, AGE_BIN, RATIO) %>%
+  group_by(TISSUE, AGE_BIN) %>%
+  summarise(AVG_RATIO = mean(RATIO), COUNT = n(), SE = sd(RATIO)/sqrt(COUNT)) %>%
+  mutate(Tissue_Label = recode(TISSUE, "Brain" = "WB/C", "Heart" = "H", "Liver" = "L")) %>%
+  mutate(Study = "Serrano") %>%
+  ungroup() %>%
+  select(Study, AGE_BIN, Tissue_Label, AVG_RATIO, SE)
+
+```
+
+```{r}
+
+sc_assym = sc_mutfreqs %>%
+  select(MouseID, AGE_BIN, Tissue, MUT_TYPE, MUT_FREQ) %>%
+  filter(Tissue == "He" | Tissue == "L" | Tissue == "C") %>% 
+  filter(MUT_TYPE == "G>A" | MUT_TYPE == "C>T") %>%
+  mutate(COL_LABELS = recode(MUT_TYPE, "G>A" = "G_A", "C>T" = "C_T")) %>%
+  select(MouseID, AGE_BIN, Tissue, COL_LABELS, MUT_FREQ) %>% 
+  pivot_wider(names_from = COL_LABELS, values_from = MUT_FREQ) %>%
+  mutate(RATIO = G_A/C_T) %>%
+  ungroup() %>%
+  select(Tissue, AGE_BIN, RATIO) %>%
+  group_by(Tissue, AGE_BIN) %>%
+  summarise(AVG_RATIO = mean(RATIO), COUNT = n(), SE = sd(RATIO)/sqrt(COUNT)) %>%
+  mutate(Tissue_Label = recode(Tissue, "C" = "WB/C", "He" = "H", "L"= "L")) %>%
+  mutate(Study = "Sanchez-Contreras") %>% 
+  ungroup() %>%
+  select(Study, AGE_BIN, Tissue_Label, AVG_RATIO, SE)
+```
+
+```{r}
+
+assym_comp_df = rbind(serrano_assym, sc_assym) %>%
+  mutate(AGE_LABEL = ifelse(AGE_BIN == "OLD", "Old", "Young"))
+
+assym_comp_df$AGE_LABEL = factor(assym_comp_df$AGE_LABEL, level = c("Young", "Old"))
+
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/")
+
+assym_comp_fig = ggplot(assym_comp_df, aes(x = Tissue_Label, y = AVG_RATIO, group = Study, color = Study))
+
+assym_comp_fig = assym_comp_fig + 
+  geom_point() + 
+  facet_wrap(AGE_LABEL~., nrow = 1) + 
+  geom_pointrange(aes(ymin=AVG_RATIO-SE, ymax=AVG_RATIO+SE)) + 
+  theme_bw(base_size = 16) + 
+  scale_color_manual(values = c("#A9A9A9","#9F2B68")) +
+  ylab("Average ratio of mutation frequencies \n(G>A/C>T)") + 
+  xlab("Tissue") + 
+  theme(strip.background = element_blank(),
+        strip.text.x = element_text(size = 16),
+        axis.text.x = element_text(size = 14),
+        axis.text.y = element_text(size = 14),
+        legend.position = "bottom")
+  
+pdf(paste(outdir_figures,"study_comp_strand_assym.pdf", sep=""),width=5,height=6)
+print(assym_comp_fig)
+dev.off()
+```
