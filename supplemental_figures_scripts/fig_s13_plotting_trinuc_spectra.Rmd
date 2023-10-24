@@ -1,0 +1,124 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/trinucleotide_context/")
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/trinucleotide_context/figures/"
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/trinucleotide_context/files/"
+
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+all_poss_trinuc_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/trinucleotide_context/files/all_possible_tris.txt"
+all_poss_trinuc = read.table(all_poss_trinuc_files, header=TRUE, stringsAsFactors = FALSE ) %>%
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN))
+
+
+```
+
+
+1) We want to create a table where we have ONLY likely de novo mutations and the start site of these mutations with the mutation type 
+
+```{r}
+de_novo_mut_info = supertable %>%
+  #this removes mutations that are likely inherited or high heteroplasmy muts 
+  filter(ALT_ALLELE_DEPTH < 100) %>%
+  #calculate the mutation frequency for each mutation at each position for each sample
+  mutate(MUT_FREQ = ALT_ALLELE_DEPTH/READ_DEPTH_AT_POS) %>%
+  #filter any mutation with a frequency > 1% 
+  filter(MUT_FREQ < 0.01) %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH) %>%
+  #removing redundant pos that exist in multiple genes 
+  unique() %>%
+  #filter for SNVs
+  filter(nchar(REF) == 1) %>%
+  filter(nchar(ALT) == 1) %>%
+  #filter out positions where 0 mutations happen
+  filter(ALT_ALLELE_DEPTH > 0 ) %>%
+  #condensing information in samples in a condition
+  select(STRAIN, TISSUE, AGE_BIN, START, REF, ALT) %>%
+  #counting each mutation once in a condition
+  unique() %>%
+  #creating our mutation field
+  mutate(MUT_TYPE = paste(REF, ALT, sep = ">"))
+  
+
+```
+
+2) Combine our mutation information with the trinucleotide info and count how many mutations in each trinuc context we have
+```{r}
+
+trinuc_count = de_novo_mut_info %>%
+  ungroup() %>%
+  left_join(all_poss_trinuc, by = c("STRAIN", "START", "MUT_TYPE")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, REC_TRI, CONS_MUT_TYPE) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, REC_TRI, CONS_MUT_TYPE) %>%
+  summarise(TRI_MUT_COUNT = n())
+
+```
+
+3) The total number of de novo mutations we have in a condition
+```{r}
+
+total_counts = de_novo_mut_info %>%
+  select(STRAIN, TISSUE, AGE_BIN) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>%
+  summarise(TOTAL_COUNT = n()) 
+
+
+```
+
+4) Calculating the mutation fraction
+```{r}
+
+plotting_df = trinuc_count %>%
+  left_join(total_counts, by = c("STRAIN", "TISSUE", "AGE_BIN")) %>%
+  mutate(MUT_FRAC = TRI_MUT_COUNT/TOTAL_COUNT)
+
+plotting_df$STRAIN = factor(plotting_df$STRAIN, levels = c("B6", "AKR", "ALR", "FVB", "NZB"))
+
+```
+
+
+```{r}
+tissue = c("Brain", "Heart", "Liver")
+age = c("YOUNG", "OLD")
+
+for (t in tissue) {
+  for (a in age) {
+    
+    #subsetting our dfs for plotting 
+    sub_plotting_df = plotting_df %>%
+      filter(AGE_BIN == a, TISSUE == t)
+  
+    #creating filename based on parameters
+    suffix = "trinucs_spectra.pdf"
+    filename = paste(a, t, suffix, sep = "_")
+    
+    trinucs_plot = ggplot(sub_plotting_df, aes(x = REC_TRI, y = MUT_FRAC, fill = CONS_MUT_TYPE)) + 
+    geom_bar(stat = "identity") +
+    facet_grid(STRAIN ~ CONS_MUT_TYPE, scales = "free_x") +
+    theme_bw() + 
+    ylab("Mutation fraction") + 
+    xlab("Trinucleotide") + 
+    theme(axis.text.x = element_text(angle = 90, size = 6), 
+          strip.background = element_blank(),
+          legend.position = "none")
+  
+    pdf(paste(outdir_figures, filename, sep=""),width=9.5,height=4)
+    print(trinucs_plot)
+    dev.off()
+  }}
+
+
+```
