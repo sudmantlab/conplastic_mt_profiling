@@ -1,0 +1,72 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/copy_number")
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/copy_number/figures/"
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/copy_number/files/"
+
+copy_num_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/copy_number/files/conplastic_mito_nuc_ratios.txt"
+copy_num = read.table(copy_num_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+```{r}
+
+copy_num_cleaned = copy_num %>%
+  separate(Sample, into = c("STRAIN_AGE", "TISSUE"), sep = "_") %>%
+  mutate(Age = case_when(grepl("O", STRAIN_AGE) ~ "O",
+                                   grepl("Y", STRAIN_AGE) ~ "Y",
+                                   TRUE ~ "MID")) %>%
+  filter(Age != "MID") %>%
+  separate(STRAIN_AGE, into = c("STRAIN", "AGE_DEL"), sep = "O|Y") %>%
+  select(STRAIN, TISSUE, Age, mGE.nGE) %>%
+  #filter out the condition we had to eliminate due to possible contamination
+  filter(!(STRAIN == "B6" & TISSUE == "Liver" & Age == "Y")) %>%
+  mutate(TISSUE = ifelse(TISSUE == "Heasrt", "Heart", TISSUE))
+
+```
+
+
+```{r}
+
+plotting_df = copy_num_cleaned %>%
+  group_by(STRAIN, TISSUE, Age) %>%
+  summarise(AVG = mean(mGE.nGE), SE = sd(mGE.nGE)/sqrt(n())) %>%
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN))
+
+
+plotting_df$STRAIN = factor(plotting_df$STRAIN, levels = c("B6", "AKR", "ALR", "FVB", "NZB"))
+plotting_df$Age = factor(plotting_df$Age, levels = c("Y", "O"))
+```
+
+```{r}
+
+mtdna_cn = ggplot(plotting_df, aes(x = STRAIN, y = AVG, fill = Age)) + 
+  geom_bar(stat = "identity", position = position_dodge()) + 
+  geom_errorbar(aes(ymin = AVG-SE, ymax = AVG+SE), position = position_dodge(0.9), width = 0.1) + 
+  facet_wrap(.~TISSUE, nrow = 3) + 
+  theme_bw() + 
+  scale_fill_manual(values = c("#A9A9A9", "#71797E")) + 
+  xlab("Strain") + 
+  ylab("Average mtDNA copy number") + 
+  theme(strip.background = element_blank(),
+        legend.position = "bottom")
+
+pdf(paste(outdir_figures,"/mtdna_cn.pdf",sep=""), width=2.5,height=4)
+print(mtdna_cn)
+dev.off()
+
+
+```
+

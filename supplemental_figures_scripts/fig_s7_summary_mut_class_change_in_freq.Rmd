@@ -1,0 +1,329 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(broom)
+library(ggsignif) 
+library(PNWColors)
+library(ggthemes)
+library(scales)
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+length_mtdna = 16299
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/change_in_mut_freq/figures"
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/change_in_mut_freq/files"
+
+supertable_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+adjusted_mut_freq_file <- "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/adjusted_mut_freq_for_haplotypes.csv"
+mut_freq <- read.table(adjusted_mut_freq_file, header=TRUE, stringsAsFactors = FALSE)
+
+bay = pnw_palette("Bay",8,type="continuous")
+moth =  pnw_palette("Moth",12,type="continuous")
+star = pnw_palette("Starfish", 7, type = "continuous")
+```
+
+```{r}
+
+mutation_classes_counts_wo_hfps = supertable %>%
+  #filtering out HFPs
+  filter(CONDITION_MUT_FREQ_AT_POS < HFP_THRESHOLD) %>% 
+  #filtering out instances where there is no mutation 
+  filter(VARIANT_TYPE != "no_mutation") %>%
+  #make sure we don't have positions that overlap in gene regions
+  #we keep ref and alt in so that we keep all alleles at a site 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, VARIANT_TYPE, ALT_ALLELE_DEPTH) %>%
+  unique() %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, VARIANT_TYPE, ALT_ALLELE_DEPTH) %>% 
+  group_by(SAMPLE, STRAIN, TISSUE, AGE_BIN, VARIANT_TYPE) %>% 
+  summarise(SAMPLE_MUT_COUNT = sum(ALT_ALLELE_DEPTH)) %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, VARIANT_TYPE, SAMPLE_MUT_COUNT) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, VARIANT_TYPE) %>% 
+  summarise(VARIANT_CLASS_COUNT = sum(SAMPLE_MUT_COUNT)) 
+
+
+```
+
+The denominator of our mutation frequency will be the number of duplex dp sequenced since this represents all possible positions that these mutation types could have occured at: 
+
+```{r}
+ref_base_depth = mut_freq %>%
+  filter(AGE_BIN != "MID") %>%
+  filter(!grepl("B6_Y3_Heart", SAMPLE)) %>%
+  filter(!grepl("B6_Y._Liver", SAMPLE)) %>%
+  mutate(STRAIN = recode(STRAIN, "F" = "FVB")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, DENOMINATOR) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>%
+  summarise(TOTAL_DUPLEX_BP = sum(DENOMINATOR))
+
+```
+
+We filter for brain, so that this tissue can serve as our representative tissue: 
+
+```{r}
+
+mutation_class_freq = mutation_classes_counts_wo_hfps %>% 
+  left_join(ref_base_depth, by = c("STRAIN", "TISSUE", "AGE_BIN")) %>% 
+  mutate(AVG_MUT_FREQ = VARIANT_CLASS_COUNT/TOTAL_DUPLEX_BP) %>% 
+  filter(TISSUE == "Brain")
+
+mutation_class_freq$STRAIN = factor(mutation_class_freq$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+mutation_class_freq$AGE_BIN = factor(mutation_class_freq$AGE_BIN, level = c("YOUNG", "OLD"))
+
+```
+
+Plotting: 
+
+```{r}
+colors = c(star[1], star[5], moth[5])
+```
+
+```{r}
+
+grid_text = supertable %>%
+  ungroup() %>% 
+  select(STRAIN, AGE_BIN) %>%
+  unique() %>%
+  mutate(x = ifelse(STRAIN == "B6", 0.9, 1), y = 3.25e-6)
+
+grid_text$STRAIN = factor(grid_text$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+
+```
+
+
+```{r}
+
+change_in_freq_mut_classes = ggplot(mutation_class_freq %>% 
+                                      mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O")), aes(x = AGE_LABEL, y = AVG_MUT_FREQ, color = VARIANT_TYPE, group = VARIANT_TYPE))
+
+change_in_freq_mut_classes = change_in_freq_mut_classes + 
+  geom_point() + 
+  geom_line() + 
+  geom_text(data = grid_text, aes(x = x, y = y, label = STRAIN), inherit.aes = FALSE) +
+  ylab("Average Mutation Frequency per Position") + 
+  xlab("Age") + 
+  scale_color_manual(name = "Mutation Class" , values = colors, labels=c("Del", "Ins", "SNVs")) +
+  facet_grid(STRAIN ~ .) + 
+  theme_bw(base_size = 16) + 
+  theme(strip.background=element_blank(),
+         text = element_text(family = "sans"),
+         axis.title.x = element_text(size = 14),
+         axis.title.y = element_text( size = 14),
+         strip.text.y = element_blank(),
+         axis.text.y = element_text(size = 10),
+        axis.text.x = element_text(size = 11), 
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/change_in_freq_mut_classes.pdf",sep=""),  width=2,height=6)
+print(change_in_freq_mut_classes)
+dev.off()
+
+pdf(paste(outdir_figures,"/leg_change_in_freq_mut_classes.pdf",sep=""),  width=5,height=6)
+print(change_in_freq_mut_classes +  theme(legend.position = "bottom"))
+dev.off()
+
+```
+
+
+Analysis ran for the heart and liver
+
+```{r}
+all_tissues_df = mutation_classes_counts_wo_hfps %>% 
+  left_join(ref_base_depth, by = c("STRAIN", "TISSUE", "AGE_BIN")) %>% 
+  mutate(AVG_MUT_FREQ = VARIANT_CLASS_COUNT/TOTAL_DUPLEX_BP)
+
+all_tissues_df$STRAIN = factor(all_tissues_df$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+all_tissues_df$AGE_BIN = factor(all_tissues_df$AGE_BIN, level = c("YOUNG", "OLD"))
+all_tissues_df$VARIANT_TYPE = factor(all_tissues_df$VARIANT_TYPE, level = c("SNV", "DEL", "INS"))
+
+```
+
+Calculating on how many SNVs we have than DEL and INS on average: 
+
+We need to combine INS and DEL counts 
+
+```{r}
+indel_snv_comparison_info = mutation_classes_counts_wo_hfps %>% 
+  mutate(VARIANT_LABEL = ifelse(VARIANT_TYPE == "SNV", "SNV", "INDEL")) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, VARIANT_LABEL, VARIANT_CLASS_COUNT) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, VARIANT_LABEL) %>% 
+  summarise(BROAD_CLASS_COUNT = sum(VARIANT_CLASS_COUNT)) %>% 
+  left_join(ref_base_depth, by = c("STRAIN", "TISSUE", "AGE_BIN")) %>% 
+  mutate(AVG_MUT_FREQ = BROAD_CLASS_COUNT/TOTAL_DUPLEX_BP)
+
+
+```
+
+```{r}
+indel_snv_comparison_info %>%
+  ungroup() %>%
+  select(VARIANT_LABEL, STRAIN, TISSUE, AGE_BIN, AVG_MUT_FREQ) %>% 
+  group_by(VARIANT_LABEL, STRAIN, TISSUE, AGE_BIN) %>% 
+  pivot_wider(values_from = AVG_MUT_FREQ, names_from = VARIANT_LABEL) %>% 
+  mutate(RATIO = SNV/INDEL) %>% 
+  ungroup() %>% 
+  select(AGE_BIN, RATIO) %>% 
+  group_by(AGE_BIN) %>% 
+  summarise(MEAN_RATIO = mean(RATIO))
+```
+
+```{r}
+
+change_in_freq_all_tissues= ggplot(all_tissues_df %>% 
+                                      mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O")), aes(x = AGE_LABEL, y = AVG_MUT_FREQ, color = VARIANT_TYPE, group = VARIANT_TYPE))
+
+change_in_freq_all_tissues = change_in_freq_all_tissues + 
+  geom_point() + 
+  geom_line() + 
+  ylab("Average Mutation Frequency per Position") + 
+  xlab("Age") + 
+  scale_color_manual(name = "Mutation Class" , values = colors, labels=c("Del", "Ins", "SNVs")) +
+  facet_grid(STRAIN ~ TISSUE) + 
+  theme_bw(base_size = 16) + 
+  theme(strip.background=element_blank(),
+         text = element_text(family = "sans"),
+         axis.title.x = element_text(size = 14),
+         axis.title.y = element_text( size = 14),
+         strip.text.x = element_text(size = 14),
+         axis.text.y = element_text(size = 10),
+        axis.text.x = element_text(size = 11), 
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/change_in_freq_all_tissues.pdf",sep=""),  width=3,height=6)
+print(change_in_freq_all_tissues)
+dev.off()
+```
+
+Main figure: Plotting this figure so that we facet by mutation class and compare the increase in each mutation class across strains
+
+```{r}
+mut_class_facet = ggplot(all_tissues_df %>% 
+                                      mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O")), aes(x = AGE_LABEL, y = AVG_MUT_FREQ, color = STRAIN, group = STRAIN))
+
+mut_class_facet = mut_class_facet + 
+  geom_line() + 
+  geom_point() + 
+  ylab("Average Mutation Frequency") + 
+  xlab("Age") + 
+  scale_color_manual(name = "Strains", values = c("B6" = "#1d457f" , "AKR" = "#cc5c76", "ALR" = "#2f9e23", "FVB" = "#f57946", "NZB" = "#f7c22d")) +
+  facet_grid(TISSUE ~ VARIANT_TYPE) + 
+  theme_bw(base_size = 12) + 
+  theme(strip.background=element_blank(),
+         text = element_text(family = "sans"),
+         axis.title.x = element_text(size = 6.5),
+         axis.title.y = element_text( size = 6.5),
+         strip.text.x = element_text(size = 7),
+         strip.text.y = element_text(size = 7),
+         axis.text.y = element_text(size = 6),
+         axis.text.x = element_text(size = 7), 
+        legend.position = "bottom", 
+        legend.text = element_text(size = 7),
+        legend.title = element_blank(),
+        legend.spacing.x = unit(0.1, 'cm'),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-10,-10,-10,-10))
+
+pdf(paste(outdir_figures,"/change_in_freq_mut_class_facet.pdf",sep=""),  width=3,height=2.25)
+print(mut_class_facet)
+dev.off()
+
+
+```
+
+We plot the change in mutation frequency using the brain as the representative tissue -- this figure is used for Figure 3A
+
+```{r}
+brain_mut_class_facet = ggplot(all_tissues_df %>% 
+                           filter(TISSUE == "Brain") %>% 
+                           mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O")), aes(x = AGE_LABEL, y = AVG_MUT_FREQ, color = STRAIN, group = STRAIN))
+
+brain_mut_class_facet = brain_mut_class_facet + 
+  geom_line() + 
+  geom_point() + 
+  ylab("Average Mutation \nFrequency") + 
+  xlab("Age") + 
+  scale_color_manual(values = c("B6" = "#1d457f" , "AKR" = "#cc5c76", "ALR" = "#2f9e23", "FVB" = "#f57946", "NZB" = "#f7c22d"), guide = "none") +
+  facet_grid(. ~ VARIANT_TYPE) + 
+  theme_bw(base_size = 12) + 
+  theme(strip.background=element_blank(),
+         text = element_text(family = "sans"),
+         axis.title.x = element_text(size = 6),
+         axis.title.y = element_text( size = 5.5),
+         strip.text.x = element_text(size = 5),
+         strip.text.y = element_text(size = 6),
+         axis.text.y = element_text(size = 4.5),
+         axis.text.x = element_text(size = 4.5), 
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/brain_change_in_freq_mut_class_facet.pdf",sep=""),  width=2.25,height=1.05)
+print(brain_mut_class_facet)
+dev.off()
+
+pdf(paste(outdir_figures,"/leg_brain_change_in_freq_mut_class_facet.pdf",sep=""),  width=5,height=3)
+print(brain_mut_class_facet + scale_color_manual(values = c("B6" = "#1d457f" , "AKR" = "#cc5c76", "ALR" = "#2f9e23", "FVB" = "#f57946", "NZB" = "#f7c22d")) + theme(legend.position = "right"))
+dev.off()
+
+
+```
+
+
+Calculating the delta in mutation frequency for each type 
+
+```{r}
+
+beta_fig_df = all_tissues_df %>% 
+  filter(!(STRAIN == "B6"& TISSUE == "Liver")) %>%
+  ungroup()%>% 
+  select(STRAIN, TISSUE, AGE_BIN, VARIANT_TYPE, AVG_MUT_FREQ) %>% 
+  pivot_wider(values_from = AVG_MUT_FREQ, names_from = AGE_BIN) %>% 
+  mutate(BETA = OLD - YOUNG)
+
+beta_fig_df$TISSUE = factor(beta_fig_df$TISSUE, level = c("Heart", "Brain", "Liver"))
+
+```
+
+
+
+```{r}
+
+beta_fig = ggplot(beta_fig_df, aes(x = BETA, y = STRAIN, color = STRAIN, shape = TISSUE)) 
+
+beta_fig = beta_fig + 
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray") + 
+  geom_point() + 
+  facet_grid(TISSUE ~ VARIANT_TYPE, scales = "free_x") + 
+  xlab("Beta Mutation Frequency\n (Old - Young)") + 
+  ylab("Strain") + 
+  scale_color_manual(values = c("B6" = "#1d457f" , "AKR" = "#cc5c76", "ALR" = "#2f9e23", "FVB" = "#f57946", "NZB" = "#f7c22d"), guide = "none") +
+  scale_shape_manual(values = c(17, 19, 15)) + 
+  theme_bw(base_size = 16) + 
+  theme(strip.background=element_blank(),
+        strip.text = element_text(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 45, size = 8, vjust = 1, hjust = 1), 
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        strip.text.y = element_text(size = 10),
+        strip.text.x = element_text(size = 9),
+        axis.text.y=element_text(size = 8),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position="none")
+
+pdf(paste(outdir_figures,"/beta_mut_classes.pdf",sep=""),  width=4.5,height=3)
+print(beta_fig)
+dev.off()
+
+
+```

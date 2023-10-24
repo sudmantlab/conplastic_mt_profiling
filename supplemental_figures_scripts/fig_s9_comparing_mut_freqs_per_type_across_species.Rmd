@@ -1,0 +1,670 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(PNWColors)
+
+bay = pnw_palette("Bay",8,type="continuous")
+moth =  pnw_palette("Moth",12,type="continuous")
+star = pnw_palette("Starfish", 7, type = "continuous")
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/change_in_mut_freq")
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/change_in_mut_freq/figures"
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/change_in_mut_freq/files"
+
+#mut_freq_per_type_file = "files/mut_freq_per_type_wo_HFPs.txt"
+#mut_freq_per_type = read.table(mut_freq_per_type_file, header=TRUE, stringsAsFactors = FALSE)
+
+#this file contains the data for Arbeithuber et al 2020 & 2022, and Kennedy et al 2013
+#this data was retrieved from their respective papers and supplementary materials 
+#data was collected only for the G>A/C>T, G>T/C>A, T>C/A>G mutations
+comparison_studies_file = "files/comparing_mut_freq_types.txt"
+comparison_studies = read.table(comparison_studies_file, header=TRUE, stringsAsFactors = FALSE)
+
+#downloading both ours and Sanchez-Contreras de novo mutation type freq
+#counts of mutations with counts aggregated across samples in a condition
+serrano_counts_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/serrano_cond_mut_counts.txt"
+serrano_counts = read.table(serrano_counts_file, header=TRUE, stringsAsFactors = FALSE)
+
+#the duplex bp depth
+serrano_ref_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/serrano_cond_ref_bases.txt"
+serrano_ref_bps = read.table(serrano_ref_file, header=TRUE, stringsAsFactors = FALSE)
+
+sc_counts_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/sc_cond_mut_counts.txt"
+sc_counts = read.table(sc_counts_file, header=TRUE, stringsAsFactors = FALSE)
+
+sc_ref_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/sc_cond_ref_bases.txt"
+sc_ref_bps = read.table(sc_ref_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+Calculating our de novo mutation frequencies per condition: 
+
+1. Combining our ref bp for complimentary mutations
+
+```{r}
+serrano_ref_condensed = serrano_ref_bps %>%
+  mutate(REF = recode(REF, "A" = "T", "C" = "G")) %>%
+  group_by(COND_LABEL, REF) %>%
+  summarise(DP_REF_BP = sum(DP_SUM))
+```
+
+2. Combining our mut counts for complimentary mutations 
+
+```{r}
+
+serrano_counts_condensed = serrano_counts %>%
+  mutate(MUT_TYPE = recode(MUT_TYPE, "A>C" = "T>G",
+                           "A>G" = "T>C",
+                           "A>T" = "T>A",
+                           "C>A" = "G>T",
+                           "C>G" = "G>C",
+                           "C>T" = "G>A")) %>%
+  select(COND_LABEL, MUT_TYPE, COND_MUT_COUNT) %>%
+  group_by(COND_LABEL, MUT_TYPE) %>%
+  summarise(MUT_COUNT = sum(COND_MUT_COUNT)) %>%
+  separate(MUT_TYPE, into = c("REF", "ALT"), remove = FALSE) %>%
+  select(COND_LABEL, MUT_TYPE, REF, MUT_COUNT)
+
+```
+
+3. Combining our ref base and mut counts dataframes 
+```{r}
+
+serrano_mut_freqs = serrano_counts_condensed %>%
+  left_join(serrano_ref_condensed, by = c("COND_LABEL", "REF")) %>%
+  mutate(MUT_FREQ = MUT_COUNT/DP_REF_BP) %>%
+  separate(COND_LABEL, sep = "_", into = c("STRAIN", "TISSUE", "AGE_BIN")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUT_TYPE, MUT_FREQ) %>%
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN))
+
+```
+
+
+```{r}
+
+rm(serrano_ref_bps, serrano_ref_condensed, serrano_counts, serrano_counts_condensed)
+
+```
+
+Creating the supplementary figure for all of our data: 
+
+```{r}
+
+sudmant_all_data = serrano_mut_freqs%>%
+  filter(MUT_TYPE == "G>A" | MUT_TYPE == "G>T" | MUT_TYPE == "T>C")
+
+sudmant_norm_factor = serrano_mut_freqs %>%
+  filter(MUT_TYPE == "G>A") %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUT_FREQ) %>%
+  rename("NORM_FREQ_FACTOR" = "MUT_FREQ")
+
+sudmant_all_data_plotting_df = sudmant_all_data %>%
+  left_join(sudmant_norm_factor, by = c("STRAIN", "TISSUE", "AGE_BIN")) %>%
+  mutate(NORM_FREQ = MUT_FREQ/NORM_FREQ_FACTOR)
+
+sudmant_all_data_plotting_df$STRAIN = factor(sudmant_all_data_plotting_df$STRAIN, levels = c("B6", "AKR", "ALR", "FVB", "NZB"))
+sudmant_all_data_plotting_df$AGE_BIN = factor(sudmant_all_data_plotting_df$AGE_BIN, levels = c("YOUNG", "OLD"))
+```
+
+```{r}
+age.labels = c("Young", "Old")
+names(age.labels) = c("YOUNG", "OLD")
+
+sudmant_all_strains_fig = ggplot(sudmant_all_data_plotting_df, aes(x = STRAIN, y = NORM_FREQ, fill = MUT_TYPE)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) + 
+  theme_bw(base_size = 16) + 
+  facet_grid(TISSUE ~ AGE_BIN, labeller = labeller(AGE_BIN = age.labels)) + 
+  ylab("Normalized Average \nMutation Frequency") + 
+  xlab("Strain") + 
+  scale_fill_manual(name = "Mutation Type",labels = c("G>A/C>T", "G>T/C>A", "T>C/A>G"), values = c(star[2], bay[4], moth[6])) + 
+  scale_y_continuous(limits = c(0,1.5), breaks = c(0,0.25,0.5,0.75,1, 1.25, 1.5)) +  
+  theme(strip.background=element_blank(),
+        strip.text = element_text(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 45, size = 9.5, hjust = 1, vjust = 1), 
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        strip.text.y = element_text(size = 14),
+        strip.text.x = element_text(size = 14),
+        axis.text.y=element_text(size = 11),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position="bottom")
+
+  
+pdf(paste(outdir_figures,"/de_novo_sudmant_all_strains_mut_type_freq_comp.pdf",sep=""), width=6,height=6)
+print(sudmant_all_strains_fig)
+dev.off()
+
+```
+
+Subsetting our data for the paper figure: 
+```{r}
+serrano_study = sudmant_all_data_plotting_df %>%
+  #comparing our old samples 
+  filter(AGE_BIN == "OLD", STRAIN == "B6") %>%
+  select(TISSUE, MUT_TYPE, NORM_FREQ) %>%
+  rename("TYPE" = "MUT_TYPE") %>%
+  mutate(STUDY = "Sudmant", SPECIES = "Mouse") 
+
+```
+
+Calculating the de novo mutation frequencies for SC 
+
+1. Combining our ref bp for complimentary mutations
+
+```{r}
+sc_ref_condensed = sc_ref_bps %>%
+  mutate(REF = recode(REF, "A" = "T", "C" = "G")) %>%
+  group_by(COND_LABEL, REF) %>%
+  summarise(DP_REF_BP = sum(DP_SUM))
+```
+
+2. Combining our mut counts for complimentary mutations 
+
+```{r}
+
+sc_counts_condensed = sc_counts %>%
+  mutate(MUT_TYPE = recode(MUT_TYPE, "A>C" = "T>G",
+                           "A>G" = "T>C",
+                           "A>T" = "T>A",
+                           "C>A" = "G>T",
+                           "C>G" = "G>C",
+                           "C>T" = "G>A")) %>%
+  select(COND_LABEL, MUT_TYPE, COND_MUT_COUNT) %>%
+  group_by(COND_LABEL, MUT_TYPE) %>%
+  summarise(MUT_COUNT = sum(COND_MUT_COUNT)) %>%
+  separate(MUT_TYPE, into = c("REF", "ALT"), remove = FALSE) %>%
+  select(COND_LABEL, MUT_TYPE, REF, MUT_COUNT)
+
+```
+
+Merging the SC dataframes to calculate the mut freq
+```{r}
+
+sc_mut_freqs = sc_counts_condensed %>%
+  left_join(sc_ref_condensed, by = c("COND_LABEL", "REF")) %>%
+  mutate(MUT_FREQ = MUT_COUNT/DP_REF_BP) %>%
+  separate(COND_LABEL, sep = "_", into = c("TISSUE", "AGE_BIN")) %>%
+  select(TISSUE, AGE_BIN, MUT_TYPE, MUT_FREQ)
+
+```
+
+```{r}
+rm(sc_counts, sc_counts_condensed, sc_ref_bps, sc_ref_condensed)
+```
+
+Creating the supplemental figures for SC: 
+
+```{r}
+
+sc_all_data = sc_mut_freqs %>% 
+  filter(MUT_TYPE == "G>A" | MUT_TYPE == "G>T" | MUT_TYPE == "T>C")
+
+sc_norm_factor = sc_mut_freqs %>%
+  filter(MUT_TYPE == "G>A") %>%
+  select(TISSUE, AGE_BIN, MUT_FREQ) %>%
+  rename("NORM_FREQ_FACTOR" = "MUT_FREQ")
+
+sc_all_data_plotting_df = sc_all_data %>%
+  left_join(sc_norm_factor, by = c("TISSUE", "AGE_BIN")) %>%
+  mutate(NORM_FREQ = MUT_FREQ/NORM_FREQ_FACTOR)
+
+sc_all_data_plotting_df$AGE_BIN = factor(sc_all_data_plotting_df$AGE_BIN, levels = c("YOUNG", "OLD"))
+sc_all_data_plotting_df$TISSUE = factor(sc_all_data_plotting_df$TISSUE, level = c("K", "L", "EC", "R", "Hi", "C", "M", "He"))
+
+```
+
+```{r}
+age.labels = c("Young", "Old")
+names(age.labels) = c("YOUNG", "OLD")
+
+sc_all_data_fig = ggplot(sc_all_data_plotting_df, aes(x = TISSUE, y = NORM_FREQ, fill = MUT_TYPE)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) + 
+  theme_bw(base_size = 16) + 
+  facet_wrap(. ~ AGE_BIN, labeller = labeller(AGE_BIN = age.labels), nrow = 2) + 
+  ylab("Normalized Average \nMutation Frequency") + 
+  xlab("Strain") + 
+  scale_fill_manual(name = "Mutation Type",labels = c("G>A/C>T", "G>T/C>A", "T>C/A>G"), values = c(star[2], bay[4], moth[6])) + 
+  scale_y_continuous(limits = c(0,1.5), breaks = c(0,0.25,0.5,0.75,1, 1.25, 1.5)) +  
+  theme(strip.background=element_blank(),
+        strip.text = element_text(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 45, size = 9.5, hjust = 1, vjust = 1), 
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        strip.text.y = element_text(size = 10),
+        strip.text.x = element_text(size = 10),
+        axis.text.y=element_text(size = 9.5),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position="none")
+
+  
+pdf(paste(outdir_figures,"/de_novo_sc_all_tissues__mut_type_freq_comp.pdf",sep=""), width=4,height=3.5)
+print(sc_all_data_fig)
+dev.off()
+
+```
+
+Subsetting SC data for the final figure: 
+```{r}
+sc_study = sc_all_data_plotting_df %>%
+  #comparing old samples 
+  filter(AGE_BIN == "OLD") %>%
+  #filtering for the tissues we're comparing
+  filter(TISSUE == "L"| TISSUE == "C") %>% 
+  mutate(TISSUE = ifelse(TISSUE == "L", "Liver", "Brain")) %>%
+  select(TISSUE, MUT_TYPE, NORM_FREQ) %>%
+  rename("TYPE" = "MUT_TYPE") %>%
+  mutate(STUDY = "Kennedy", SPECIES = "Mouse") 
+
+```
+
+Combining information across all studies for the final figure which just highlights the aged mice: 
+```{r}
+norm_factor_other_studies = comparison_studies %>% 
+  filter(AGE == "OLD") %>%
+  filter(TYPE == "G>A") %>% 
+  rename("NORM_FREQ_FACTOR" = "MUT_FREQ") %>%
+  select(STUDY, SPECIES, TISSUE, NORM_FREQ_FACTOR)
+  
+other_studies_norm_freqs = comparison_studies %>% 
+  filter(AGE == "OLD") %>%
+  left_join(norm_factor_other_studies, by = c("STUDY", "SPECIES", "TISSUE")) %>% 
+  mutate(NORM_FREQ = MUT_FREQ/NORM_FREQ_FACTOR) %>%
+  select(TISSUE, TYPE, NORM_FREQ, STUDY, SPECIES)
+
+combined_df = rbind(other_studies_norm_freqs, serrano_study, sc_study) %>%
+  mutate(TYPE = recode(TYPE, "G>A" = "G>A/C>T",
+                       "G>T" = "G>T/C>A",
+                       "T>C" = "T>C/A>G")) %>%
+  mutate(LABEL = paste(STUDY, SPECIES, TISSUE, sep = "_"))
+
+```
+
+
+```{r}
+
+main_fig_summary = combined_df %>%
+  filter(TISSUE == "Brain"| TISSUE == "Liver") 
+
+main_fig_summary$TYPE = factor(main_fig_summary$TYPE, level = c("G>A/C>T", "G>T/C>A", "T>C/A>G"))
+main_fig_summary$LABEL = factor(main_fig_summary$LABEL, level = c("Sudmant_Mouse_Brain", "Makova_Mouse_Brain", "Kennedy_Mouse_Brain", "Sudmant_Mouse_Liver", "Kennedy_Mouse_Liver","Kennedy_Human_Brain", "Makova_Macaque_Liver"))
+
+```
+
+
+Main figure: Compares the brain for mice and humans and the liver for macaques and mice 
+```{r}
+comp = ggplot(main_fig_summary, aes(x = TYPE, y = NORM_FREQ, fill = TYPE)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) + 
+  theme_bw() + 
+  facet_wrap(.~ LABEL, nrow = 1) + 
+  ylab("Normalized Average \nMutation Frequency") + 
+  xlab("Mutation Type") + 
+  scale_fill_manual(name = "Mutation Type",labels = c("G>A/C>T", "G>T/C>A", "T>C/A>G"), values = c(star[2], bay[4], moth[6])) + 
+  scale_y_continuous(limits = c(0,1), breaks = c(0,0.25,0.5,0.75,1)) +  
+  theme(strip.background=element_blank(),
+        strip.text = element_blank(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 45, size = 10, hjust = 1, vjust = 1), 
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 10),
+        strip.text.y = element_text(size = 5),
+        strip.text.x = element_text(size = 5),
+        axis.text.y=element_text(size = 10),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position="none")
+  
+pdf(paste(outdir_figures,"/de_novo_brain_liver_mut_type_freq_comp.pdf",sep=""), width = 6, height=2.5)
+print(comp)
+dev.off() 
+
+```
+
+Creating the Arbeithuber Supplemental figures: 
+
+Creating the dataframe for the mice figure: 
+
+```{r}
+
+makova_mice_all_data = comparison_studies %>%
+  filter(STUDY == "Makova", SPECIES == "Mouse")
+
+makova_mice_norm = makova_mice_all_data %>% 
+  filter(TYPE == "G>A") %>%
+  select(TISSUE, AGE, TYPE, MUT_FREQ) %>%
+  rename("NORM_FREQ_FACTOR" = "MUT_FREQ") %>%
+  select(TISSUE, AGE, NORM_FREQ_FACTOR)
+
+
+makova_mice_all_data_plotting_df = makova_mice_all_data %>%
+  left_join(makova_mice_norm, by = c("TISSUE", "AGE")) %>%
+  mutate(NORM_FREQ = MUT_FREQ/NORM_FREQ_FACTOR)
+
+makova_mice_all_data_plotting_df$AGE = factor(makova_mice_all_data_plotting_df$AGE, levels = c("YOUNG", "OLD"))
+makova_mice_all_data_plotting_df$TISSUE = factor(makova_mice_all_data_plotting_df$TISSUE, level = c("Brain", "Muscle", "Oocyte"))
+
+```
+
+Creating the dataframe for the macaque figure: 
+
+```{r}
+
+makova_macaque_all_data = comparison_studies %>%
+  filter(STUDY == "Makova", SPECIES == "Macaque")
+
+makova_macaque_norm = makova_macaque_all_data %>% 
+  filter(TYPE == "G>A") %>%
+  select(TISSUE, AGE, TYPE, MUT_FREQ) %>%
+  rename("NORM_FREQ_FACTOR" = "MUT_FREQ") %>%
+  select(TISSUE, AGE, NORM_FREQ_FACTOR)
+
+
+makova_macaque_all_data_plotting_df = makova_macaque_all_data %>%
+  left_join(makova_macaque_norm, by = c("TISSUE", "AGE")) %>%
+  mutate(NORM_FREQ = MUT_FREQ/NORM_FREQ_FACTOR)
+
+makova_macaque_all_data_plotting_df$AGE = factor(makova_macaque_all_data_plotting_df$AGE, levels = c("YOUNG", "OLD"))
+makova_macaque_all_data_plotting_df$TISSUE = factor(makova_macaque_all_data_plotting_df$TISSUE, level = c("Liver", "Muscle", "Oocyte"))
+
+```
+
+Plotting the Arbeithuber mice supplemental figure:
+
+
+```{r}
+age.labels = c("Young", "Old")
+names(age.labels) = c("YOUNG", "OLD")
+
+makova_mice_all_data_fig = ggplot(makova_mice_all_data_plotting_df, aes(x = TISSUE, y = NORM_FREQ, fill = TYPE)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) + 
+  theme_bw(base_size = 16) + 
+  facet_wrap(. ~ AGE, labeller = labeller(AGE = age.labels), nrow = 2) + 
+  ylab("Normalized Average \nMutation Frequency") + 
+  xlab("Strain") + 
+  scale_fill_manual(name = "Mutation Type",labels = c("G>A/C>T", "G>T/C>A", "T>C/A>G"), values = c(star[2], bay[4], moth[6])) + 
+  scale_y_continuous(limits = c(0,1.5), breaks = c(0,0.25,0.5,0.75,1, 1.25, 1.5)) +  
+  theme(strip.background=element_blank(),
+        strip.text = element_text(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 45, size = 9.5, hjust = 1, vjust = 1), 
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        strip.text.y = element_text(size = 10),
+        strip.text.x = element_text(size = 10),
+        axis.text.y=element_text(size = 9.5),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position="none")
+
+  
+pdf(paste(outdir_figures,"/de_novo_makova_mice_all_tissues_mut_type_freq_comp.pdf",sep=""), width=2.5,height=3.5)
+print(makova_mice_all_data_fig)
+dev.off()
+
+```
+Plotting the Arbeithuber macaque supplemental figure:
+
+```{r}
+age.labels = c("Young", "Old")
+names(age.labels) = c("YOUNG", "OLD")
+
+makova_macaque_all_data_fig = ggplot(makova_macaque_all_data_plotting_df, aes(x = TISSUE, y = NORM_FREQ, fill = TYPE)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) + 
+  theme_bw(base_size = 16) + 
+  facet_wrap(. ~ AGE, labeller = labeller(AGE = age.labels), nrow = 2) + 
+  ylab("Normalized Average \nMutation Frequency") + 
+  xlab("Strain") + 
+  scale_fill_manual(name = "Mutation Type",labels = c("G>A/C>T", "G>T/C>A", "T>C/A>G"), values = c(star[2], bay[4], moth[6])) + 
+  scale_y_continuous(limits = c(0,1.5), breaks = c(0,0.25,0.5,0.75,1, 1.25, 1.5)) +  
+  theme(strip.background=element_blank(),
+        strip.text = element_text(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 45, size = 9.5, hjust = 1, vjust = 1), 
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        strip.text.y = element_text(size = 10),
+        strip.text.x = element_text(size = 10),
+        axis.text.y=element_text(size = 9.5),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position="none")
+
+  
+pdf(paste(outdir_figures,"/de_novo_makova_macaque_all_tissues_mut_type_freq_comp.pdf",sep=""), width=2.5,height=3.5)
+print(makova_macaque_all_data_fig)
+dev.off()
+
+```
+
+
+```{r}
+
+brain_freqs = combined_df %>%
+  filter(STUDY == "Makova" | STUDY == "Sudmant") %>%
+  filter(SPECIES == "Mouse") %>%
+  filter(TISSUE == "Brain")
+
+```
+
+
+```{r}
+our_brain = serrano_mut_freqs %>%
+  filter(STRAIN == "B6", TISSUE == "Brain") %>%
+  filter(AGE_BIN == "OLD") %>%
+  filter(MUT_TYPE == "G>A" | MUT_TYPE == "G>T" | MUT_TYPE == "T>C") %>%
+  select(MUT_TYPE, MUT_FREQ) %>%
+  mutate(STUDY = "Serrano")
+
+mak_brain = combined_df %>% 
+  filter(STUDY == "Makova", SPECIES == "Mouse") %>% 
+  filter(TISSUE == "Brain") %>%
+  rename("MUT_TYPE" = "TYPE") %>%
+  select(MUT_TYPE, MUT_FREQ, STUDY)
+
+brain_freqs = rbind(our_liver, mak_brain)
+```
+```{r}
+
+ggplot(brain_freqs, aes(x = MUT_TYPE, y = MUT_FREQ, fill = STUDY)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) + 
+  theme_bw() + 
+  #facet_wrap(.~ LABEL, nrow = 1) + 
+  ylab("Mutation Frequency") + 
+  xlab("Mutation Type") + 
+  #scale_fill_manual(name = "Mutation Type" , labels = c("G>A/C>T", "G>T/C>A", "T>C/A>G"), values = refactored_spec_colors) + 
+  #scale_y_continuous(limits = c(0,1), breaks = c(0,0.25,0.5,0.75,1)) +  
+  theme(strip.background=element_blank(),
+        strip.text = element_blank(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 45, size = 10, hjust = 1, vjust = 1), 
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 10),
+        strip.text.y = element_text(size = 5),
+        strip.text.x = element_text(size = 5),
+        axis.text.y=element_text(size = 10),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+```
+
+```{r}
+our_liver = serrano_mut_freqs %>%
+  filter(STRAIN == "B6", TISSUE == "Liver") %>%
+  filter(AGE_BIN == "OLD") %>%
+  filter(MUT_TYPE == "G>A" | MUT_TYPE == "G>T" | MUT_TYPE == "T>C") %>%
+  select(MUT_TYPE, MUT_FREQ) %>%
+  mutate(STUDY = "Serrano")
+
+kennedy_liver = sc_mut_freqs %>% 
+  filter(TISSUE == "L") %>%
+  filter(AGE_BIN == "OLD") %>%
+  filter(MUT_TYPE == "G>A" | MUT_TYPE == "G>T" | MUT_TYPE == "T>C") %>%
+  select(MUT_TYPE, MUT_FREQ) %>%
+  mutate(STUDY = "SC")
+
+liver_freqs = rbind(our_liver, kennedy_liver)
+```
+
+```{r}
+ggplot(liver_freqs, aes(x = MUT_TYPE, y = MUT_FREQ, fill = STUDY)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) + 
+  theme_bw() + 
+  #facet_wrap(.~ LABEL, nrow = 1) + 
+  ylab("Mutation Frequency") + 
+  xlab("Mutation Type") + 
+  #scale_fill_manual(name = "Mutation Type" , labels = c("G>A/C>T", "G>T/C>A", "T>C/A>G"), values = refactored_spec_colors) + 
+  #scale_y_continuous(limits = c(0,1), breaks = c(0,0.25,0.5,0.75,1)) +  
+  theme(strip.background=element_blank(),
+        strip.text = element_blank(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 45, size = 10, hjust = 1, vjust = 1), 
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 10),
+        strip.text.y = element_text(size = 5),
+        strip.text.x = element_text(size = 5),
+        axis.text.y=element_text(size = 10),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+```
+
+Supp Fig: Macaque tissues 
+
+```{r}
+
+macaque_df = summary_df %>% 
+  filter(SPECIES == "Macaque")
+
+macaque_plot = ggplot(macaque_df, aes(x = TYPE, y = NORM_FREQ, fill = TYPE)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) + 
+  theme_bw() + 
+  ylab("Normalized Average \nMutation Frequency") + 
+  xlab("Mutation Type") + 
+  facet_wrap(.~TISSUE, nrow = 1) +
+  scale_fill_manual(name = "Mutation Type" , labels = c("G>A/C>T", "G>T/C>A", "T>C/A>G"), values = refactored_spec_colors) + 
+  scale_y_continuous(limits = c(0,1), breaks = c(0,0.25,0.5,0.75,1)) +  
+  theme(strip.background=element_blank(),
+        strip.text = element_blank(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 45, size = 9, hjust = 1, vjust = 1), 
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 11),
+        strip.text.y = element_text(size = 12),
+        strip.text.x = element_text(size = 10),
+        axis.text.y=element_text(size = 9),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position="none")
+  
+pdf(paste(outdir_figures,"/macaque_mut_type_freq_comp.pdf",sep=""), width=3,height=2.5)
+print(macaque_plot)
+dev.off() 
+
+```
+
+Supplementary figure Makova mice 
+
+```{r}
+
+makova_mice_df = summary_df %>% 
+  filter(SPECIES == "Mouse", STUDY == "Makova")
+
+makova_mice_plot = ggplot(makova_mice_df, aes(x = TYPE, y = NORM_FREQ, fill = TYPE)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) + 
+  theme_bw() + 
+  ylab("Normalized Average \nMutation Frequency") + 
+  xlab("Mutation Type") + 
+  facet_wrap(.~TISSUE, nrow = 1) +
+  scale_fill_manual(name = "Mutation Type" , labels = c("G>A/C>T", "G>T/C>A", "T>C/A>G"), values = refactored_spec_colors) + 
+  scale_y_continuous(limits = c(0,1), breaks = c(0,0.25,0.5,0.75,1)) + 
+  theme(strip.background=element_blank(),
+        strip.text = element_blank(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 45, size = 9, hjust = 1, vjust = 1), 
+        axis.title.x = element_text(size = 11),
+        axis.title.y = element_text(size = 11),
+        strip.text.y = element_text(size = 12),
+        strip.text.x = element_text(size = 10),
+        axis.text.y=element_text(size = 9),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position="none")
+  
+pdf(paste(outdir_figures,"/makova_mice_mut_type_freq_comp.pdf",sep=""), width=3,height=2.5)
+print(makova_mice_plot)
+dev.off() 
+
+```
+
+
+Plotting the frequencies unnormalized 
+
+```{r}
+
+unnorm_comp = ggplot(summary_df %>% 
+                filter(LABEL %in% c("Sudmant_Mouse_Brain", "Makova_Mouse_Brain", "Kennedy_Human_Brain", "Sudmant_Mouse_Liver", "Makova_Macaque_Liver")), aes(x = TYPE, y = MUT_FREQ, fill = TYPE)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) + 
+  theme_bw() + 
+  facet_wrap(.~ LABEL, nrow = 1) + 
+  ylab("Average \nMutation Frequency") + 
+  xlab("Mutation Type") + 
+  scale_fill_manual(name = "Mutation Type" , labels = c("G>A/C>T", "G>T/C>A", "T>C/A>G"), values = refactored_spec_colors) + 
+  #scale_y_continuous(limits = c(0,15), breaks = c(0,1,5,10,15)) +  
+  theme(strip.background=element_blank(),
+        strip.text = element_blank(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 45, size = 10, hjust = 1, vjust = 1), 
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        strip.text.y = element_text(size = 5),
+        strip.text.x = element_text(size = 5),
+        axis.text.y=element_text(size = 10),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position="none")
+  
+pdf(paste(outdir_figures,"/unnorm_brain_liver_mut_type_freq_comp.pdf",sep=""), width=6,height=3)
+print(unnorm_comp)
+dev.off() 
+
+```
+
+~~~~
+
+
+This analyses was only conducted in aged mice
+
+```{r}
+
+sudmant_study = mut_freq_per_type %>% 
+  filter(AGE_BIN == "OLD") %>%
+  select(STRAIN, TISSUE, MUTATION_TYPE, FREQ) %>% 
+  filter(MUTATION_TYPE == "G>A" | MUTATION_TYPE == "G>T" | MUTATION_TYPE == "T>C") %>%
+  group_by(TISSUE, MUTATION_TYPE) %>% 
+  summarise(AVG_MUT_FREQ_ACROSS_STRAINS = mean(FREQ)) %>% 
+  rename("TYPE" = "MUTATION_TYPE", "MUT_FREQ" = "AVG_MUT_FREQ_ACROSS_STRAINS") %>%
+  mutate(STUDY = "Sudmant", SPECIES = "Mouse") 
+  
+```

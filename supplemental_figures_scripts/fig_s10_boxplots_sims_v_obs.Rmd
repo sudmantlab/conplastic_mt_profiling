@@ -1,0 +1,122 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+outdir_files =  "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/files/"
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/figures/"
+
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+sims_file = "files/sim_hNhS_ratios_per_gene_per_bin.txt"
+sim_ratios = read.table(sims_file, sep = "\t")
+
+```
+
+We first want to create a summary df for our sims 
+
+```{r}
+sim_ratio_stats = sim_ratios %>%
+  select(STRAIN, TISSUE, AGE_BIN, BIN, GENE, SIM_RATIO) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, BIN, GENE) %>%
+  summarise(AVG = mean(SIM_RATIO), LOWER_QUANT  = quantile(SIM_RATIO, prob = 0.025), HIGHER_QUANT = quantile(SIM_RATIO, prob = 0.975), MAX = max(SIM_RATIO), MIN = min(SIM_RATIO))
+
+```
+
+```{r}
+
+rm(sim_ratios)
+
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+obs_ratios_file = "files/obs_hNhS_ratios_per_gene_per_bin.txt"
+obs_ratios = read.table(obs_ratios_file, sep = "\t")
+
+```
+
+Ordering our bins to help with visualization:
+
+```{r}
+sim_ratio_stats$BIN = factor(sim_ratio_stats$BIN, levels = rev(c("upper-1", "upper-1e-2", "upper-1e-3", "upper-1e-4", "upper-5e-5")))
+sim_ratio_stats$STRAIN = factor(sim_ratio_stats$STRAIN, levels = c("B6", "AKR", "ALR", "FVB", "NZB"))
+
+obs_ratios$BIN = factor(obs_ratios$BIN, levels = rev(c("upper-1", "upper-1e-2", "upper-1e-3", "upper-1e-4", "upper-5e-5")))
+obs_ratios$STRAIN = factor(obs_ratios$STRAIN, levels = c("B6", "AKR", "ALR", "FVB", "NZB"))
+
+```
+
+Setting our color palette:
+
+```{r}
+library(PNWColors)
+
+bay_pal = pnw_palette("Bay", 8, type = "continuous")
+
+```
+
+Building our a for loop to create and export our 6 different plots (age x tissue combo)
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+tissue = c("Brain", "Heart", "Liver")
+age = c("YOUNG", "OLD")
+
+for (t in tissue) {
+  for (a in age) {
+    
+    #subsetting our dfs for plotting 
+    sims_df = sim_ratio_stats %>%
+      filter(AGE_BIN == a, TISSUE == t)
+    
+    obs_df = obs_ratios %>%
+      filter(AGE_BIN == a, TISSUE == t)
+    
+    #creating filename based on parameters
+    suffix = "boxplots.pdf"
+    filename = paste(a, t, suffix, sep = "_")
+    
+    #creating and exporting the figure
+    
+    dist_fig = ggplot(sims_df, aes(x = log10(AVG), y = BIN, color = BIN)) + 
+    geom_vline(xintercept = 0, color = "gray", linetype = "dashed") + 
+    geom_point(size = 0.7, shape = 15) +
+    geom_segment(data = sims_df, aes(x = log10(LOWER_QUANT), xend = log10(HIGHER_QUANT), y = BIN, yend = BIN, color = BIN)) +
+    geom_point(data = obs_df, aes(x = log10(OBS_RATIO), y = BIN), color = "magenta",  size = 0.75, shape = 8) + 
+    facet_grid(STRAIN~GENE) + 
+    theme_bw() + 
+    xlab("log10(hN/hS ratio)") + 
+    ylab("Frequency bin") + 
+    scale_y_discrete(labels = c("upper-5e-5" = "(0, 5e-5]", "upper-1e-4" = "(5e-5, 1e-4]", "upper-1e-3" = "(1e-4, 1e-3]", "upper-1e-2" = "(1e-3, 1e-2]", "upper-1" = "(1e-2, 1]")) +
+    scale_color_manual(name = "Frequency Bins", values = c("upper-1" = bay_pal[8], "upper-1e-2" = bay_pal[5], "upper-1e-3" = bay_pal[4], "upper-1e-4" = bay_pal[3], "upper-5e-5" = bay_pal[1]), labels = c("upper-5e-5" = "(0, 5e-5]", "upper-1e-4" = "(5e-5, 1e-4]", "upper-1e-3" = "(1e-4, 1e-3]", "upper-1e-2" = "(1e-3, 1e-2]", "upper-1" = "(1e-2, 1]")) +
+    theme(strip.background = element_blank(),
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 90, size = 8),
+    axis.text.y = element_text(size = 8.5))
+
+pdf(paste(outdir_figures, filename, sep=""),width=8.25,height=6)
+print(dist_fig)
+dev.off()
+    
+  }
+}
+
+
+```
