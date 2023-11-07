@@ -1,28 +1,52 @@
+#Updated by IMS 08-22-2023
+
 import pandas as pd 
 import numpy as np
+#libraries in base python
 import io
 import os
 import math
+import argparse
+#libraries we need to import from BioPython
 from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.Seq import MutableSeq
+from Bio.SeqRecord import SeqRecord
+
+#parsing the arguments (mainly files) we will be using in this analysis 
+#adding user defined inputs for our simulator
+parser = argparse.ArgumentParser()
+#parameters defining our experimental unit
+parser.add_argument("-vcf_file_path", help = "File path to the vcf we want to annotate")
+parser.add_argument("-fasta_file_path", help = "File path to the corresponding fasta file")
+parser.add_argument("-haplotype_file_path", help = "File path to a file containing information about mouse haplotypes that distinguish it from mm10")
+parser.add_argument("-mt_coords_file_path", help = "File path to a coordinates file for the mm10 chrM")
+parser.add_argument("-output_file", help = "Name of output file you'd like to designate")
+
+args = parser.parse_args()
 
 ##Import, filter, and format all of the files we will be working from##
 
 #upload file we want to annotate
-vcf_file = snakemake.input[0]
+vcf_file = args.vcf_file_path
 vcf = pd.read_csv(vcf_file,  sep = "\t")
 
-ref_seq = SeqIO.read(snakemake.input[1], "fasta")
-ref_seq = ref_seq.upper()
+#upload fasta file
+chrM_file = args.fasta_file_path
+ref_seq_record = SeqIO.read(chrM_file, "fasta")
+#ref_seq is now a seq object that we made sure was all uppercase for downstream string comparison
+ref_seq = ref_seq_record.seq.upper()
 
 #file needed to make the haplotype dictionary 
-haplotype_info_file = snakemake.input[2]
+haplotype_info_file = args.haplotype_file_path
 haplotype_info = pd.read_csv(haplotype_info_file,  sep = "\t")
 
 #filter out indels from the haplotype info (won't be included in our dictionary to mutate)
-haplotype_info = haplotype_info[haplotype_info["VARIANT_TYPE"] == "SNV"]
+#only keep SNVs
+haplotype_snvs_only = haplotype_info[haplotype_info["VARIANT_TYPE"] == "SNV"]
 
 #file that contains information for the genes in the mtGenome
-mt_dna_coords_file = snakemake.input[3]
+mt_dna_coords_file = args.mt_coords_file_path
 mt_dna_coords = pd.read_csv(mt_dna_coords_file,  sep = "\t", header = None)
 
 #Formatting the mt_dna_coords file 
@@ -51,17 +75,18 @@ protein_coding = ["mt-Nd1", "mt-Nd2", "mt-Co1", "mt-Co2", "mt-Atp8", \
 mt_dna_coords["CODING"] = np.where(mt_dna_coords["GENE"].isin(protein_coding), "PROTEIN", "OTHER")
 
 ##create a dictionary with the following structure {"strain":[[site, ref, alt], [site, ref, alt]} -- builds the dictionary as we want##
-haplotype_info = haplotype_info.drop_duplicates(subset = ["STRAIN", "START"], keep = "first")[["STRAIN", \
-                                                                                         "START", "REF", "ALT"]]
-strains = list(haplotype_info["STRAIN"].unique())
+haplotype_wo_dloop = haplotype_snvs_only[haplotype_snvs_only["START"] < 15422].drop_duplicates(subset =
+ ["STRAIN", "START"], keep = "first")[["STRAIN","START", "REF", "ALT"]]
+
+strains = list(haplotype_wo_dloop["STRAIN"].unique())
 
 haplotype_dict = {}
-for strain in strains:
-    #take the position, ref, and alt alleles for all haploptypes for a given strain & place into one list of lists 
-    haplotypes = haplotype_info[haplotype_info["STRAIN"] == strain]
-    haplotypes = haplotypes[["START", "REF", "ALT"]].values.tolist()
+for conplastic in strains:
+    #take the position, ref, and alt alleles for all haploptypes for a given strain & place into one list of lists
+    haplotypes_for_strain = haplotype_wo_dloop[haplotype_wo_dloop["STRAIN"] == conplastic]
+    haplotypes_for_strain = haplotypes_for_strain[["START", "REF", "ALT"]].values.tolist()
     #add the list of lists as a value to the strain keys
-    haplotype_dict[strain] = haplotypes
+    haplotype_dict[conplastic] = haplotypes_for_strain
 
 ##create the functions that we will be using to annotate our variants##
 ##get_ref_genome -- input: string of strain name; output: a seq object of the strain reference genome 
@@ -71,20 +96,25 @@ for strain in strains:
 ##annotation_process -- input: sample, mutation_pos, ref_allele, alt_allele, strain_ref_genome, mt_dna_coords; output: appending to the results lists the following information sample, mutation_pos, ref_allele, alt_allele, annotation, gene, codon_index, codon_pos, ref_AA, alt_AA
 
 def get_ref_genome(strain, haplotype_dict):
-    #convert from a seq to a mutable object in order to mutate the sequence
-    strain_ref_genome = ref_seq.seq.tomutable()
+   #we need to convert from a seq to a mutable object in order to mutate our sequence
+    mutable_strain_ref_genome = MutableSeq(ref_seq)
 
     haplotypes = haplotype_dict[strain]
-    
-    #loop through each haplotype and mutate the ref sequence from mm10 accordingly
+
+    #we loop through each haplotype and mutate the ref sequence from mm10 accordingly
     for index in range(0, len(haplotypes)):
         site = haplotypes[index][0]
         allele = haplotypes[index][2]
-        strain_ref_genome[site] = allele
-    
-    #convert back to a seq object in order to access all methods for seq objects 
-    strain_ref_genome = strain_ref_genome.toseq()
-    
+
+        #a check to make sure that the site we are mutating is correct
+        if mutable_strain_ref_genome[site] != haplotypes[index][1]:
+            print("There's an error in identifying the ref genome site")
+
+        #changing the allele at position in the ref genome
+        mutable_strain_ref_genome[site] = allele
+        #convert back to a seq object in order to access all the biological methods
+    strain_ref_genome = Seq(mutable_strain_ref_genome)
+
     return strain_ref_genome
 
 def get_gene_info(mutation_pos, mt_dna_coords):
@@ -115,12 +145,13 @@ def get_annotation(strain_ref_genome, gene, gene_start, gene_end, mutation_pos, 
     ref_amino_acid_seq = str(ref_gene.translate(table="Vertebrate Mitochondrial"))
     
     #mutate the reference genome to have the mutation we want to annotate
-    mutant_genome = strain_ref_genome.tomutable()
+    #strain_ref_genome is a Seq object
+    mutant_genome = MutableSeq(strain_ref_genome)
     mutant_genome[mutation_pos] = alt_allele
-    #change the mutatant genome back to a sequence object 
-    mutant_genome = mutant_genome.toseq()
+    #change the mutant genome back to a sequence object 
+    mutant_genome_seq_obj = Seq(mutant_genome)
     #grab the mutatant gene
-    mutant_gene = mutant_genome[gene_start:gene_end]
+    mutant_gene = mutant_genome_seq_obj[gene_start:gene_end]
     
     #in the case that our mutatant gene is ND6 we need to reverse complement the gene
     #note: reverse complementing the mutant gene as a whole will complement the alternate allele 
@@ -225,7 +256,7 @@ for strain in strains_to_check:
     
     #obtain the conplastic strain reference genome
     if strain == "B6":
-        strain_ref_genome = ref_seq.seq
+        strain_ref_genome = ref_seq
     else:
         strain_ref_genome = get_ref_genome(strain, haplotype_dict)
     
@@ -238,5 +269,5 @@ for strain in strains_to_check:
 annotations = pd.DataFrame(results, columns = ["STRAIN", "POS", "REF", "ALT", "ANNOTATION", "GENE", \
                                             "CODON_INDEX", "CODON_POS", "REF_AA", "ALT_AA"])
 
-output_file = snakemake.output[0]
+output_file = args.output_file
 annotations.to_csv(output_file, header=True, index=False, sep = "\t")

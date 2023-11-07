@@ -1,0 +1,212 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+outdir_files =  "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/files/"
+outdir_figures =  "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/figures/"
+
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+```
+
+Creating the mutation count without D-Loop file 
+```{r}
+total_mut_count_wo_dloop = supertable %>%
+  #filter for SNVs 
+  filter(VARIANT_TYPE == "SNV") %>%
+  #we are removing the D-Loop which we know is a hotspot in the mt-genome 
+  filter(GENE != "D-Loop") %>%
+  #filter out mutations that are segregating at high frequency
+  filter(CONDITION_MUT_FREQ_AT_POS < 0.001) %>%
+  #calculating the mutation count within a condition
+  select(STRAIN, TISSUE, AGE_BIN, ALT_ALLELE_DEPTH) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>%
+  summarise(HET_COUNT = sum(ALT_ALLELE_DEPTH)) %>%
+  #this is needed so that the FVB strain name matches across files -- ugh
+  mutate(STRAIN = recode(STRAIN, "FVB" = "F"))
+
+```
+
+```{r}
+outdir_files ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/files/"  
+
+#exporting our strand bias fishers exact test 
+write.table(total_mut_count_wo_dloop, file = paste(outdir_files,"/total_mut_count_wo_dloop.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+```
+
+We need to calculate the proportion of each mutation type -- this will give us the probability of drawing a mutation of each type 
+```{r}
+mut_type_counts = supertable %>%
+  #filter for SNVs 
+  filter(VARIANT_TYPE == "SNV") %>%
+  #we are removing the D-Loop which we know is a hotspot in the mt-genome 
+  filter(GENE != "D-Loop") %>% 
+  #filter out mutations that are segregating at high frequency
+  filter(CONDITION_MUT_FREQ_AT_POS < 0.001) %>%
+  mutate(MUTATION_TYPE = paste(REF, ALT, sep = ">")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, ALT_ALLELE_DEPTH) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE) %>%
+  summarise(MUT_TYPE_COUNT = sum(ALT_ALLELE_DEPTH)) %>%
+  #this is needed so that the FVB strain name matches across files -- ugh
+  mutate(STRAIN = recode(STRAIN, "FVB" = "F"))
+```
+
+Creating a dummy df to make sure we account for mut types that do not appear in a condition
+```{r}
+
+condition = unique((mut_type_counts %>%
+  select(STRAIN, TISSUE, AGE_BIN) %>%
+  mutate(COND = paste(STRAIN, TISSUE, AGE_BIN, sep = "_")))$COND)
+
+dummy_cond = rep(condition, each = 12)
+
+dummy_mut_type = rep(unique(mut_type_counts$MUTATION_TYPE), 29)
+
+dummy_df = cbind(data.frame(dummy_cond), data.frame(dummy_mut_type)) %>%
+  separate(dummy_cond, into = c("STRAIN", "TISSUE", "AGE_BIN")) %>%
+  rename(MUTATION_TYPE = dummy_mut_type)
+```
+
+Merging the dummy df with the mut counts data frame to account for all mutation types across conditions
+```{r}
+
+#there are 2 conditions that are missing a mutation type 
+mut_type_count_all_muts_wo_dloop = dummy_df %>%
+  left_join(mut_type_counts, by = c("STRAIN", "TISSUE", "AGE_BIN", "MUTATION_TYPE")) %>%
+  mutate(MUT_TYPE_COUNT = ifelse(is.na(MUT_TYPE_COUNT), 0, MUT_TYPE_COUNT))
+
+```
+
+Now we can calculate the proportion of mutations in the non-dloop regions
+
+```{r}
+mut_type_props_nondloop = mut_type_count_all_muts_wo_dloop %>%
+  left_join(total_mut_count_wo_dloop, by = c("STRAIN", "TISSUE", "AGE_BIN")) %>%
+  mutate(HET_PROP = MUT_TYPE_COUNT/HET_COUNT) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, MUT_TYPE_COUNT, HET_PROP) %>%
+  mutate(REGION = "NON_DLOOP")
+```
+
+```{r}
+#exporting the file 
+outdir_files ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/files/"  
+
+#exporting our strand bias fishers exact test 
+write.table(mut_type_props_nondloop, file = paste(outdir_files,"/mut_type_props_nondloop.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+To calculate the proportions of mutation types in the D-Loop we repeat the analyses above for just the mutation in the D-Loop region
+
+```{r}
+
+total_mut_count_in_dloop = supertable %>%
+  #filter for SNVs 
+  filter(VARIANT_TYPE == "SNV") %>%
+  #we are removing the D-Loop which we know is a hotspot in the mt-genome 
+  filter(GENE == "D-Loop") %>% 
+  #filter out mutations that are segregating at high frequency
+  filter(CONDITION_MUT_FREQ_AT_POS < 0.001) %>%
+  #calculating the mutation count within a condition
+  select(STRAIN, TISSUE, AGE_BIN, ALT_ALLELE_DEPTH) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>%
+  summarise(HET_COUNT = sum(ALT_ALLELE_DEPTH)) %>%
+  #this is needed so that the FVB strain name matches across files -- ugh
+  mutate(STRAIN = recode(STRAIN, "FVB" = "F"))
+
+```
+
+Calculating the mutation type count in the D-Loop
+
+```{r}
+mut_types_counts_in_dloop = supertable %>%
+  #filter for SNVs 
+  filter(VARIANT_TYPE == "SNV") %>%
+  #we are removing the D-Loop which we know is a hotspot in the mt-genome 
+  filter(GENE == "D-Loop") %>% 
+  #filter out mutations that are segregating at high frequency
+  filter(CONDITION_MUT_FREQ_AT_POS < 0.001) %>%
+  mutate(MUTATION_TYPE = paste(REF, ALT, sep = ">")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, ALT_ALLELE_DEPTH) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE) %>%
+  summarise(MUT_TYPE_COUNT = sum(ALT_ALLELE_DEPTH)) %>%
+  #this is needed so that the FVB strain name matches across files -- ugh
+  mutate(STRAIN = recode(STRAIN, "FVB" = "F"))
+
+```
+We want to make sure we account for mutation types that did not occur in the D-Loop 
+```{r}
+
+mut_type_props_dloop = dummy_df %>%
+  left_join(mut_types_counts_in_dloop, by = c("STRAIN", "TISSUE", "AGE_BIN", "MUTATION_TYPE")) %>%
+  mutate(MUT_TYPE_COUNT = ifelse(is.na(MUT_TYPE_COUNT), 0, MUT_TYPE_COUNT)) %>%
+  left_join(total_mut_count_in_dloop, by = c("STRAIN", "TISSUE", "AGE_BIN")) %>%
+  mutate(HET_PROP = MUT_TYPE_COUNT/HET_COUNT) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, MUT_TYPE_COUNT, HET_PROP) %>%
+  mutate(REGION = "DLOOP") 
+  
+
+```
+
+
+Now to compare the D-Loop v non-D-Loop mutational landscapes 
+
+```{r}
+comparing_props_df = mut_type_props_dloop %>%
+  rbind(mut_type_props_nondloop) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, HET_PROP, REGION) 
+  
+```
+
+```{r}
+summary_prop_comp_df = comparing_props_df %>%
+  select(TISSUE, AGE_BIN, MUTATION_TYPE, HET_PROP, REGION) %>%
+  group_by(TISSUE, AGE_BIN, MUTATION_TYPE, REGION) %>%
+  summarise(AVG = mean(HET_PROP), N = n(), SE = sd(HET_PROP)/ sqrt(N))
+
+#rearranging our mutation based on frequency 
+summary_prop_comp_df$MUTATION_TYPE = factor(summary_prop_comp_df$MUTATION_TYPE, levels = c("G>A", "C>T", "G>T", "C>A", "T>C", "A>G", "G>C", "C>G", "T>A", "A>T", "T>G", "A>C"))
+summary_prop_comp_df$AGE_BIN = factor(summary_prop_comp_df$AGE_BIN, levels = c("YOUNG", "OLD"))
+```
+
+Plotting the comparison of mutation proportions between D-Loop and non-D-Loop
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+age.labels = c("Young", "Old")
+names(age.labels) = c("YOUNG", "OLD")
+
+comp_props_fig = ggplot(summary_prop_comp_df, aes(x = MUTATION_TYPE, y = AVG, color = REGION))
+
+comp_props_fig = comp_props_fig + 
+  geom_point(size = 0.5) + 
+  geom_errorbar(aes(ymin=AVG-SE, ymax=AVG+SE), width = 0.2) + 
+  facet_grid(TISSUE ~ AGE_BIN, labeller = labeller(AGE_BIN = age.labels)) + 
+  theme_bw(base_size = 16) + 
+  xlab("Mutation Type") + 
+  ylab("Average Proportion") + 
+  scale_color_manual(name = "Region", labels = c("D-Loop", "Non D-Loop"), values = c("#A9A9A9","#9F2B68")) +
+  theme(strip.background = element_blank(), 
+        axis.text.x = element_text(angle = 90, size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title.y = element_text(size = 12),
+        axis.title.x = element_text(size = 12),
+        legend.position = "bottom")
+
+pdf(paste(outdir_figures,"/dloop_v_nondloop_mut_props.pdf", sep=""),width=5,height=4)
+print(comp_props_fig)
+dev.off()
+
+
+```

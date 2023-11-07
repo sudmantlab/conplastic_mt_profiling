@@ -1,0 +1,273 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+outdir_files =  "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/files/"
+outdir_figures =  "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/figures/"
+
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+```
+
+Calculating the total read depth at each position -- this will be the denominator for our mutation frequency 
+```{r}
+read_depth_per_pos = supertable %>% 
+  #we only want to do this analysis for non-DLoop regions
+  filter(START < 15422) %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS) %>%
+  #removes duplicates from places where multiple alleles exist
+  unique() %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, START) %>% 
+  summarise(COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS))
+
+```
+
+Calculating the count of each allele at each position -- this will be the numerator for our mutation frequency 
+```{r}
+allele_count_per_pos = supertable %>%
+  #only interested in this analysis for the coding regions
+  filter(START < 15422) %>% 
+  #for every sample, each row is a different allele
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH) %>%
+  #to remove the positions in overlapping gene regions
+  unique() %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH) %>%
+  #summing alt allele counts across samples
+  group_by(STRAIN, TISSUE, AGE_BIN, START, REF, ALT) %>%
+  summarise(COND_ALT_ALLELE_COUNT_AT_POS = sum(ALT_ALLELE_DEPTH)) %>%
+  filter(!(REF == ALT))
+
+```
+
+Merging our denominator and numerator dfs to calculate the mutation frequency: count of alleles at each position / the read depth at that position
+```{r}
+
+allele_freq_per_pos = allele_count_per_pos %>%
+  left_join(read_depth_per_pos, by = c("STRAIN", "TISSUE", "AGE_BIN", "START")) %>%
+  mutate(ALLELE_FREQ_AT_POS = COND_ALT_ALLELE_COUNT_AT_POS/COND_READ_DEPTH_AT_POS) %>%
+  #filtering for SNVs
+  filter(nchar(REF) == 1) %>%
+  filter(nchar(ALT) == 1)
+
+```
+
+Calculating mutation frequency bins -- these are very arbitrary
+```{r}
+
+bins_per_allele_freq = allele_freq_per_pos %>%
+  ungroup() %>%
+  mutate(MUT_TYPE = paste(REF, ALT, sep = ">")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, MUT_TYPE, COND_ALT_ALLELE_COUNT_AT_POS, ALLELE_FREQ_AT_POS) %>%
+  #these bins are incredibly arbitrary 
+  mutate(BIN = cut(ALLELE_FREQ_AT_POS, breaks = c(0,5e-5,1e-4,1e-3,1e-2,1), labels = c("upper-5e-5","upper-1e-4","upper-1e-3", "upper-1e-2","upper-1")))
+
+
+```
+
+Exporting our file with the mutation counts and the bin assignments
+
+```{r}
+write.table(bins_per_allele_freq, file = paste(outdir_files,"/mut_type_counts_bins_assigned.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+```
+
+Calculating the total number of muts per bin
+```{r}
+total_count_per_bin = bins_per_allele_freq %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, BIN, COND_ALT_ALLELE_COUNT_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, BIN) %>%
+  summarise(TOTAL_MUT_COUNT = sum(COND_ALT_ALLELE_COUNT_AT_POS))
+```
+
+Calculating the mut type count per bin 
+
+```{r}
+
+mut_type_count_per_bin = bins_per_allele_freq %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUT_TYPE, BIN, COND_ALT_ALLELE_COUNT_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, BIN, MUT_TYPE) %>%
+  summarise(MUT_TYPE_COUNT = sum(COND_ALT_ALLELE_COUNT_AT_POS))
+
+```
+
+Merging our mut type and total counts per bin 
+
+```{r}
+
+prop_mut_type_per_bin = mut_type_count_per_bin %>%
+  left_join(total_count_per_bin, by = c("STRAIN", "TISSUE", "AGE_BIN", "BIN")) %>%
+  mutate(PROP = MUT_TYPE_COUNT/TOTAL_MUT_COUNT)
+
+prop_mut_type_per_bin$MUT_TYPE = factor(prop_mut_type_per_bin$MUT_TYPE, levels =  c("G>A" ,"C>T", "G>T" , "C>A", "T>C", "A>G", "G>C", "C>G", "T>A" , "A>T","T>G", "A>C"))
+
+prop_mut_type_per_bin$STRAIN = factor(prop_mut_type_per_bin$STRAIN, levels =  c("B6", "AKR", "ALR", "FVB", "NZB"))
+
+prop_mut_type_per_bin$BIN = factor(prop_mut_type_per_bin$BIN, levels = rev(c("upper-1", "upper-1e-2", "upper-1e-3", "upper-1e-4", "upper-5e-5")))
+
+```
+
+Plotting the proportion for young
+
+```{r}
+library(PNWColors)
+
+bay_pal = pnw_palette("Bay", 8, type = "continuous")
+
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+prop_young = ggplot(prop_mut_type_per_bin %>% filter(AGE_BIN == "YOUNG"), aes(x = MUT_TYPE, y = PROP, color = BIN))
+
+prop_young = prop_young + 
+  geom_point(size = 0.75) + 
+  theme_bw() + 
+  xlab("Mutation Type") + 
+  ylab("Proportion") + 
+  facet_grid(TISSUE ~ STRAIN) + 
+  scale_color_manual(name = "Frequency Bins", values = c("upper-1" = bay_pal[8], "upper-1e-2" = bay_pal[5], "upper-1e-3" = bay_pal[4], "upper-1e-4" = bay_pal[3], "upper-5e-5" = bay_pal[1])) +
+  theme(axis.text.x = element_text(angle = 90, size = 8),
+        strip.background = element_blank(),
+        legend.position = "bottom")
+
+pdf(paste(outdir_figures,"/young_mut_type_props_per_freq.pdf", sep=""),width=8,height=4)
+print(prop_young)
+dev.off()
+```
+
+
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+prop_old = ggplot(prop_mut_type_per_bin %>% filter(AGE_BIN == "OLD"), aes(x = MUT_TYPE, y = PROP, color = BIN))
+
+prop_old = prop_old + 
+  geom_point(size = 0.75) + 
+  theme_bw() + 
+  xlab("Mutation Type") + 
+  ylab("Proportion") + 
+  facet_grid(TISSUE ~ STRAIN) + 
+  scale_color_manual(name = "Frequency Bins", values = c("upper-1" = bay_pal[8], "upper-1e-2" = bay_pal[5], "upper-1e-3" = bay_pal[4], "upper-1e-4" = bay_pal[3], "upper-5e-5" = bay_pal[1])) +
+  theme(axis.text.x = element_text(angle = 90, size = 8),
+        strip.background = element_blank(),
+        legend.position = "bottom")
+
+pdf(paste(outdir_figures,"/old_mut_type_props_per_freq.pdf", sep=""),width=8,height=4)
+print(prop_old)
+dev.off()
+
+```
+
+For our simulator, we want to account for all bins, so we need to fill in with 0s mutation counts and proportions that do not exist for a given condition x bin:
+
+```{r}
+
+LABEL_REPS = rep(((total_count_per_bin %>%
+  select(STRAIN, TISSUE, AGE_BIN) %>%
+  mutate(LABEL = paste(STRAIN, TISSUE, AGE_BIN, sep = "_")) %>%
+    unique())$LABEL), each = 5)
+
+
+BIN_REPS = rep(unique(total_count_per_bin$BIN), 29)
+
+dummy_df = cbind(data.frame(LABEL_REPS), data.frame(BIN_REPS)) %>%
+  separate(LABEL_REPS, into = c("STRAIN", "TISSUE", "AGE_BIN"), sep = "_")
+
+colnames(dummy_df) = c("STRAIN", "TISSUE", "AGE_BIN", "BIN")
+
+```
+
+Now we combine our total mut counts file with our dummy file: 
+
+```{r}
+
+total_mut_count_all_bins = dummy_df %>%
+  left_join(total_count_per_bin, by = c("STRAIN", "TISSUE", "AGE_BIN", "BIN")) %>%
+  mutate(TOTAL_MUT_COUNT = ifelse(is.na(TOTAL_MUT_COUNT), 0, TOTAL_MUT_COUNT)) %>%
+  mutate(STRAIN = ifelse(STRAIN == "FVB", "F", STRAIN))
+
+```
+
+We have to create a new dummy df for the mut type proportions: 
+
+We're going to do this in 2 steps: 
+
+1) Create a mut_type_bin label first, which will have the combination of all mutation types and bins 
+
+```{r}
+
+#we repeat the mut types 8 times (for each bin)
+MUT_TYPE_REPS = rep(unique(prop_mut_type_per_bin$MUT_TYPE), each = 5)
+
+#repeating the bins by the amount of mut types we have 
+MUT_TYPE_BIN_REPS = rep(unique(total_count_per_bin$BIN), 12)
+
+MUT_TYPE_BIN = (cbind(data.frame(MUT_TYPE_REPS), data.frame(MUT_TYPE_BIN_REPS)) %>%
+  mutate(MUT_TYPE_BIN_LABEL = paste(MUT_TYPE_REPS, MUT_TYPE_BIN_REPS, sep = "_")))$MUT_TYPE_BIN_LABEL
+
+```
+
+2) Now create the combination of all mutation types, bins, and experiment 
+```{r}
+
+MUT_TYPE_EXP_LABEL_REPS = rep(((total_count_per_bin %>%
+  select(STRAIN, TISSUE, AGE_BIN) %>%
+  mutate(LABEL = paste(STRAIN, TISSUE, AGE_BIN, sep = "_")) %>%
+    unique())$LABEL), each = 60)
+
+MUT_TYPE_BIN_REPS = rep(MUT_TYPE_BIN, 29)
+
+mut_type_dummy_df = cbind(data.frame(MUT_TYPE_EXP_LABEL_REPS),data.frame(MUT_TYPE_BIN_REPS)) %>%
+  separate(MUT_TYPE_EXP_LABEL_REPS, into = c("STRAIN", "TISSUE", "AGE_BIN"), sep = "_") %>%
+  separate(MUT_TYPE_BIN_REPS, into = c("MUT_TYPE", "BIN"), sep = "_")
+
+```
+
+```{r}
+
+prop_mut_types_all_bins = mut_type_dummy_df %>%
+  left_join(prop_mut_type_per_bin, by = c("STRAIN", "TISSUE", "AGE_BIN", "MUT_TYPE", "BIN")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUT_TYPE, BIN, PROP) %>%
+  mutate(PROP = ifelse(is.na(PROP), 0, PROP)) %>%
+  mutate(STRAIN = ifelse(STRAIN == "FVB", "F", STRAIN))
+
+```
+
+```{r}
+prop_mut_types_all_bins %>%
+  select(STRAIN, TISSUE, AGE_BIN, BIN, PROP) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, BIN) %>%
+  summarise(TOTAL_PROP = sum(PROP))
+```
+
+Exporting our mutational proportions and mutational counts files: 
+
+```{r}
+
+write.table(prop_mut_types_all_bins, file = paste(outdir_files,"/mut_type_props_all_bins_wo_dloop.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+write.table(total_mut_count_all_bins, file = paste(outdir_files,"/total_mut_counts_all_bins_wo_dloop.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+```{r}
+total_mut_count_all_bins %>%
+  filter(TOTAL_MUT_COUNT == 0)
+
+
+```
+
+
