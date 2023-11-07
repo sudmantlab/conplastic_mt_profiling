@@ -1,0 +1,68 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+```
+
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+outdir_files =  "files/"
+outdir_figures = "figures/"
+
+#contains information about the number of alleles we see at a site and their annotations 
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+
+#contains information about the possible sites (denominator for our hN and hS quantities)
+total_num_sites_file ="files/total_annotated_num_sites_per_gene.txt"
+total_num_sites = read.table(total_num_sites_file, header=TRUE, stringsAsFactors = FALSE)
+```
+
+```{r}
+
+observed_mut_counts = supertable %>% 
+  #filter out HFPs from the data since we are comparing with sims that do not have HFPs accounted for 
+  filter(CONDITION_MUT_FREQ_AT_POS < HFP_THRESHOLD) %>% 
+  #we only care about SNVs
+  filter(VARIANT_TYPE == "SNV") %>%
+  #we only care about nsyn and syn annotations
+  filter(ANNOTATION != "non_coding_transcript_exon_variant") %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, ANNOTATION, ALT_ALLELE_DEPTH) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE, ANNOTATION) %>% 
+  summarise(MUT_COUNT = sum(ALT_ALLELE_DEPTH)) %>% 
+  pivot_wider(names_from = ANNOTATION, values_from = MUT_COUNT) %>% 
+  rename("OBS_NONSYN_MUT_COUNT" = "missense_variant", "OBS_SYN_MUT_COUNT" = "synonymous_variant") 
+
+#in the case that we did not observe an nsyn or syn mutation we input a 0
+observed_mut_counts[is.na(observed_mut_counts)] <- 0
+
+```
+
+Merge our total_num_sites (denominator) and our observed mut counts (numerator)
+
+```{r}
+obs_hNhS = observed_mut_counts %>% 
+  left_join(total_num_sites, by = c("STRAIN", "TISSUE", "AGE_BIN", "GENE")) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, OBS_NONSYN_MUT_COUNT, OBS_SYN_MUT_COUNT, TOTAL_NONSYN_SITE_COUNT, TOTAL_SYN_SITE_COUNT) %>% 
+  mutate(obs_hN = OBS_NONSYN_MUT_COUNT/TOTAL_NONSYN_SITE_COUNT, obs_hS = OBS_SYN_MUT_COUNT/TOTAL_SYN_SITE_COUNT) %>% 
+  mutate(OBS_HNHS = obs_hN/obs_hS) %>%
+  #calculated hNhS as Inf because there are 0 syn mutations in the gene --> cannot calculate the hNhS ratio
+  filter(OBS_HNHS != "Inf")
+```
+
+Writing out our file
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+write.table(obs_hNhS, file = paste(outdir_files,"/obs_hNhS_ratios_per_gene.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+
+```
+

@@ -1,0 +1,217 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+Note our simulated data was calculated without HFPs
+
+```{r}
+#we need to download all of our simulated data 
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_wo_dloop/")
+
+outdir_files =  "files/"
+outdir_figures = "figures/"
+
+sims_hnhs_file = "files/sims_hNhS_ratios_per_gene_wo_dloop.txt"
+sims_hnhs = read.table(sims_hnhs_file, header=TRUE, stringsAsFactors = FALSE)
+
+obs_hnhs_file = "files/obs_hNhS_ratios_per_gene.txt"
+obs_hnhs = read.table(obs_hnhs_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+```{r}
+
+obs_hnhs$STRAIN = factor(obs_hnhs$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+obs_hnhs$AGE_BIN = factor(obs_hnhs$AGE_BIN, level = c("YOUNG", "OLD"))
+
+
+sims_hnhs$STRAIN = factor(sims_hnhs$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+sims_hnhs$AGE_BIN = factor(sims_hnhs$AGE_BIN, level = c("YOUNG", "OLD"))
+
+```
+
+Filtering out ratios that we cannot calculate (e.g. nsyn and syn counts are 0)
+```{r}
+#we did not lose any more entries (filtered out syn != 0 in earlier processing )
+filtered_obs_hnhs = obs_hnhs %>% 
+  filter(OBS_NONSYN_MUT_COUNT != 0) %>% 
+  filter(OBS_SYN_MUT_COUNT != 0)
+```
+
+```{r}
+filtered_sims_hnhs = sims_hnhs %>% 
+  filter(SIM_NONSYN_MUT_COUNT != 0) %>% 
+  filter(SIM_SYN_MUT_COUNT != 0)
+
+```
+
+Visualizing where our observed hN/hS ratios fall wrt to the distribution of simulated ratios:
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_wo_dloop/")
+
+hnhs_violinplot = ggplot(filtered_obs_hnhs)
+
+hnhs_violinplot = hnhs_violinplot + 
+  geom_violin(data = filtered_sims_hnhs, aes(x = log10(SIM_HNHS), y = GENE, fill = AGE_BIN), alpha = 0.7, size = 0, scale = "width") + 
+  geom_point(aes(x = log10(OBS_HNHS), y = GENE, color = AGE_BIN), size = 0.75 , shape = 8) +
+  xlab("log10(hN/hS)") + 
+  ylab("Gene") + 
+  facet_grid(STRAIN~TISSUE) + 
+  scale_color_manual(name = "Age", labels = c("Young", "Old"), values = c("grey57", "black")) + 
+  scale_fill_manual(name = "Age", labels = c("Young", "Old"), values = c("grey80", "black")) + 
+  theme_bw(base_size =  15) +
+  theme(strip.background=element_blank(),
+        strip.text = element_text(), 
+        text = element_text(family = "sans")) + 
+  coord_cartesian(xlim = c(-5, 5))
+
+pdf(paste(outdir_figures,"/hnhs_per_gene_wo_hfps_wo_dloop.pdf",sep=""), width=8,height=10.5)
+print(hnhs_violinplot)
+dev.off()
+```
+
+Determining the significant hits:
+
+```{r}
+#keep the fields we need from the observed hnhs ratios 
+obs = filtered_obs_hnhs %>%
+  select(STRAIN, TISSUE, AGE_BIN, GENE, OBS_HNHS)
+
+#calculate stats summaries across the simulation runs (e.g. average hnhs across sims)
+sims_summary_stats = filtered_sims_hnhs %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, SIM_HNHS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE) %>% 
+  summarise(MEDIAN = median(SIM_HNHS),
+            AVG = mean(SIM_HNHS), 
+            SD = sd(SIM_HNHS), 
+            LOWER = quantile(SIM_HNHS, probs = 0.025, na.rm = T), 
+            HIGHER = quantile(SIM_HNHS, probs = 0.975, na.rm = T))
+
+merged_data = sims_summary_stats %>% 
+  left_join(obs, by = c("STRAIN", "TISSUE", "AGE_BIN", "GENE"))
+
+
+rm(obs, sims_summary_stats)
+
+
+```
+
+```{r}
+#merge the observed data and stats with the simulation info 
+merged_data_w_sim_data = filtered_sims_hnhs %>% 
+  select(STRAIN, TISSUE, AGE_BIN, SIM_RUN, GENE, SIM_HNHS) %>%
+  left_join(merged_data, by = c("STRAIN", "TISSUE", "AGE_BIN", "GENE"))
+
+rm(filtered_sims_hnhs)
+
+```
+
+```{r}
+#we compare our sim and obs hnhs value with respect to the average sim hnhs
+z_scored_data = merged_data_w_sim_data %>% 
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, GENE, SIM_RUN, SIM_HNHS, OBS_HNHS, AVG) %>%
+  mutate(Z_SIM = SIM_HNHS - AVG, Z_OBS = OBS_HNHS - AVG)
+
+#range of sims after filtering 9331 10000 with an average of 9989
+p_values = z_scored_data %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, OBS_HNHS, Z_SIM, Z_OBS) %>% 
+  mutate(POS_Z_OBS = abs(Z_OBS), NEG_Z_OBS = -1*POS_Z_OBS) %>% 
+  #how many data points do we have for each gene -- remember we filtered out sims where nsyn or syn had a count of 0
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE, OBS_HNHS, Z_OBS) %>% 
+  mutate(SIM_TOTAL = n()) %>% 
+  ungroup() %>% 
+  #identify if our simulations generate values passed our obs pt in their respective upper or lower tails -- this is based on the Z_OBS sign --> greater or lower than the expected 
+  #if our Z_OBS is negative then, look to see how many NEG_Z_OBS are smaller than Z_SIM, if it's not then look to see how many Z_SIM is larger than (basically see how many points DO NOT surpass Z_OBS at the tails)
+  mutate(COMP_Z_OBS = ifelse(Z_OBS < 0, ifelse(NEG_Z_OBS >= Z_SIM, 1, 0), ifelse(POS_Z_OBS <= Z_SIM, 1, 0))) %>% 
+  #we need to count how many points are more extreme than our obs value under the null
+  select(STRAIN, TISSUE, AGE_BIN, SIM_TOTAL, GENE, OBS_HNHS, Z_OBS, COMP_Z_OBS) %>% 
+  #Z_OBS should be the same across sims in a condition
+  group_by(STRAIN, TISSUE, AGE_BIN, SIM_TOTAL, GENE, OBS_HNHS, Z_OBS) %>% 
+  #this sum is the number of sims that surpass our z_obs score at the tails
+  summarise(SUM_COMPARISON = sum(COMP_Z_OBS)) %>% 
+  #multiplying by 2 to create a 2-tailed test --> assuming that we have a symmetric distribution; this will allow for a stricter significance level & more reliable/conservative results
+  mutate(P_VALUE = 2*(SUM_COMPARISON/SIM_TOTAL)) %>%
+  #this is a super important move because p-adj will work according to the grouped vector length of the p-value column
+  ungroup() %>%
+  #we need to multiple hypothesis correct
+  mutate(P_ADJ = p.adjust(P_VALUE, method="BH")) %>% 
+  na.omit() %>%
+  mutate(COLOR_LABEL = ifelse(P_ADJ < 0.01, as.character(STRAIN), "INSIG"))
+
+```
+
+```{r}
+
+range(p_values$P_VALUE)
+
+```
+
+```{r}
+
+p_values %>%
+  filter(P_ADJ < 0.01)
+
+```
+
+p_values df has all of our significance analysis and the obs hnhs ratio
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_wo_dloop/")
+
+p_values$AGE_BIN = factor(p_values$AGE_BIN, level = c( "YOUNG", "OLD"))
+
+sig_points = p_values %>% 
+  filter(P_ADJ <= 0.01) %>% 
+  mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O"))
+
+insig_points = p_values %>% 
+  filter(P_ADJ > 0.01) %>% 
+  mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O"))
+
+summary_hNhS = ggplot(p_values %>% 
+                        mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O")))
+
+summary_hNhS = summary_hNhS + 
+  geom_point(data = insig_points, aes(x = log10(OBS_HNHS), y = GENE, shape = TISSUE, color = COLOR_LABEL), alpha = 0.9, size = 0.85) + 
+  geom_point(data = sig_points, aes(x = log10(OBS_HNHS), y = GENE, shape = TISSUE, color = COLOR_LABEL), alpha = 0.9) +
+  facet_wrap(AGE_LABEL~., strip.position = "right", ncol = 1) + 
+  xlab("log10(hN/hS)") +
+  ylab("Age") + 
+  scale_color_manual(values = c("B6" = "#1d457f" , "AKR" = "#cc5c76", "ALR" = "#625a94", "FVB" = "#f57946", "NZB" = "#f7c22d", "INSIG" = "gray90")) +
+  scale_shape_manual(values = c(19, 17, 15)) + 
+  theme_bw(base_size = 16) + 
+  theme(strip.background=element_blank(),
+        strip.text.y = element_text(angle = 0), 
+        text = element_text(family = "sans"), 
+        legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank())
+
+pdf(paste(outdir_figures,"/summary_hnhs_per_gene_wo_hfps_wo_dloop.pdf",sep=""), width=6,height=6)
+print(summary_hNhS)
+dev.off()
+
+pdf(paste(outdir_figures,"/summary_hnhs_per_gene_wo_hfps_wo_dloop_leg.pdf",sep=""), width=10,height=6)
+print(summary_hNhS + theme(legend.position = "bottom"))
+dev.off()
+
+
+```
+
+Export the output of our significance analysis for future simpler analyses 
+
+```{R}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_wo_dloop/")
+
+write.table(p_values, file = paste(outdir_files,"/hNhS_per_gene_pvals_wo_dloop.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+

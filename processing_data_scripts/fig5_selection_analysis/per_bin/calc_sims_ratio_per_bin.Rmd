@@ -1,0 +1,87 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+outdir_files =  "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/files/"
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/figures"
+
+#loading in our simulations 
+sims_file = "files/combined_simulations_counts_per_gene.txt"
+sims = read.table(sims_file, header=TRUE, stringsAsFactors = FALSE)
+```
+
+```{r}
+sims_wider = sims %>%
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN)) %>%
+  pivot_wider(names_from = ANNOTATION, values_from = COUNT)
+
+```
+
+```{r}
+rm(sims)
+```
+
+Drop the simulations where we would not be able to calculate an hn/hs ratio due to 0 nonsyn or 0 syn counts
+Relabel the FVB strain for merging and relabel the nonsyn and syn count columns accordingly 
+```{r}
+filtered_sims_wider = sims_wider %>%
+  drop_na() %>%
+  rename(SIM_NONSYN_COUNT = missense_variant, SIM_SYN_COUNT = synonymous_variant) 
+```
+
+```{r}
+rm(sims_wider)
+```
+
+Import our total_num_sites file 
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+total_num_sites_file = "files/total_annotated_num_sites_per_gene.txt"
+total_num_sites = read.table(total_num_sites_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+Merging our denominator and numerator files
+
+```{r}
+sim_ratios = filtered_sims_wider %>%
+  left_join(total_num_sites, by = c("STRAIN", "TISSUE", "AGE_BIN", "GENE")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, BIN, SIM_RUN, GENE, SIM_NONSYN_COUNT, SIM_SYN_COUNT, TOTAL_NONSYN_SITE_COUNT, TOTAL_SYN_SITE_COUNT) %>%
+  mutate(hN = SIM_NONSYN_COUNT/TOTAL_NONSYN_SITE_COUNT, hS = SIM_SYN_COUNT/TOTAL_SYN_SITE_COUNT) %>%
+  mutate(SIM_RATIO = hN/hS) %>%
+  select(STRAIN, TISSUE, AGE_BIN, BIN, SIM_RUN, GENE, SIM_RATIO)
+
+```
+
+We want to see for each condition x bin x gene how many simulations there are:
+
+```{r}
+#range is from 165 to 10,000 simulations
+num_sims = filtered_sims_wider %>%
+  select(STRAIN, TISSUE, AGE_BIN, BIN, GENE) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, BIN, GENE) %>%
+  summarise(SIM_COUNT = n())
+
+```
+
+We export the sim_hnhs ratios
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+write.table(sim_ratios, file = paste(outdir_files,"/sim_hNhS_ratios_per_gene_per_bin.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+
+```
+

@@ -1,0 +1,88 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+```
+
+Note our simulated data was calculated without HFPs
+
+```{r}
+#we need to download all of our simulated data 
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+outdir_files =  "files/"
+outdir_figures = "figures/"
+
+B6_sims_file = "files/B6_count_per_gene.txt"
+AKR_sims_file = "files/AKR_count_per_gene.txt"
+ALR_sims_file = "files/ALR_count_per_gene.txt"
+FVB_sims_file = "files/FVB_count_per_gene.txt"
+NZB_sims_file = "files/NZB_count_per_gene.txt"
+
+B6_sims = read.table(B6_sims_file, header=TRUE, stringsAsFactors = FALSE)
+AKR_sims = read.table(AKR_sims_file, header=TRUE, stringsAsFactors = FALSE)
+ALR_sims = read.table(ALR_sims_file, header=TRUE, stringsAsFactors = FALSE)
+FVB_sims = read.table(FVB_sims_file, header=TRUE, stringsAsFactors = FALSE)
+NZB_sims = read.table(NZB_sims_file, header=TRUE, stringsAsFactors = FALSE)
+
+
+```
+
+```{r}
+
+simulations = bind_rows(B6_sims, AKR_sims, ALR_sims, FVB_sims, NZB_sims)
+
+rm(B6_sims, AKR_sims, ALR_sims, FVB_sims, NZB_sims)
+
+```
+
+```{r}
+#we reformat our simulations long format to wide format in order to allow for easy calculations of the ratio
+simulations_wide = simulations %>% 
+  pivot_wider(names_from = ANNOTATION, values_from = COUNT) %>% 
+  rename("SIM_NONSYN_MUT_COUNT" = "missense_variant", "SIM_SYN_MUT_COUNT" = "synonymous_variant") 
+
+#in the case that we did not simulate any syn or nsyn mutations 
+simulations_wide[is.na(simulations_wide)] <- 0
+
+rm(simulations)
+
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+#contains information about the possible sites (denominator for our hN and hS quantities)
+total_num_sites_file ="files/total_annotated_num_sites_per_gene.txt"
+total_num_sites = read.table(total_num_sites_file, header=TRUE, stringsAsFactors = FALSE)
+```
+
+
+```{r}
+sims_data = simulations_wide %>% 
+  filter(!(STRAIN == "B6" & TISSUE == "Liver" & AGE_BIN == "YOUNG")) %>%
+  left_join(total_num_sites, by = c("STRAIN", "TISSUE", "AGE_BIN", "GENE")) %>% 
+  select(SIM_RUN, STRAIN, TISSUE, AGE_BIN, GENE, SIM_NONSYN_MUT_COUNT, TOTAL_NONSYN_SITE_COUNT, SIM_SYN_MUT_COUNT, TOTAL_SYN_SITE_COUNT)
+
+```
+
+```{r}
+sim_hnhs = sims_data %>% 
+  mutate(SIM_HN = SIM_NONSYN_MUT_COUNT/TOTAL_NONSYN_SITE_COUNT, SIM_HS = SIM_SYN_MUT_COUNT/TOTAL_SYN_SITE_COUNT) %>% 
+  mutate(SIM_HNHS = SIM_HN/SIM_HS)
+```
+
+Writing out our file
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/")
+
+write.table(sim_hnhs, file = paste(outdir_files,"/sims_hNhS_ratios_per_gene.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+
+```
+
+
