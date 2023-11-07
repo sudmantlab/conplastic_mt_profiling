@@ -9,10 +9,12 @@ from Bio import SeqIO
 parser = argparse.ArgumentParser()
 parser.add_argument("-strain", help = "Conplastic Strain Name")
 parser.add_argument("-mut_count_file_path", help = "File path to the mut count file you are referring to")
+parser.add_argument("-sim_num", help = "Number of sims you wish to generate")
 parser.add_argument("-mut_prop_file_path", help = "File path to the mut prop file you are referring to")
 parser.add_argument("-wo_hfp", action = "store_true", help = "Includes wo_hfp in output")
 args = parser.parse_args()
 strain = args.strain
+sim_num = int(args.sim_num)
 
 if args.wo_hfp:
 	print("wo_hfps")
@@ -27,11 +29,11 @@ mut_type_prop = pd.read_csv(mut_prop_file, sep = "\t")
 mut_total_count = pd.read_csv(mut_total_count_file, sep = "\t")
 
 #loading in our annotation file of all possible variants
-annotation_file = "files/annotated_all_possible_variants.txt"
+annotation_file = "../files/annotated_all_possible_variants.txt"
 annotations = pd.read_csv(annotation_file, sep = "\t")
 
 #read in our chrM sequence and create our dictionary of positions
-chrM_file = "files/chrM.fa"
+chrM_file = "../files/chrM.fa"
 ref_seq = SeqIO.read(chrM_file, "fasta")
 
 #merging our files to have the information we need in one position
@@ -41,7 +43,7 @@ per_condition_info = pd.merge(mut_type_prop, mut_total_count, how = "left", on =
                                                                                  "AGE_BIN"])
 
 #file needed to make the haplotype dictionary
-haplotype_info_file = "files/haplotype_mutations.vcf"
+haplotype_info_file = "../files/haplotype_mutations.vcf"
 haplotype_info = pd.read_csv(haplotype_info_file,  sep = "\t")
 
 #only keep SNVs
@@ -133,7 +135,7 @@ for age in ["YOUNG", "OLD"]:
                                                               mut_type_prop_dict["C>A"], mut_type_prop_dict["C>G"], mut_type_prop_dict["C>T"],\
                                                               mut_type_prop_dict["G>A"], mut_type_prop_dict["G>C"], mut_type_prop_dict["G>T"],\
                                                               mut_type_prop_dict["T>A"], mut_type_prop_dict["T>C"], mut_type_prop_dict["T>G"]],\
-                                              10000)
+                                              sim_num)
         list_of_mutations = list(mut_type_prop_dict.keys())
         
         #generate the mutations given in each simulation
@@ -222,18 +224,11 @@ annotated_simulated_variants = pd.merge(filtering_noncoding_regions, annotations
 
 protein_coding_annotated_simulated_variants = annotated_simulated_variants[annotated_simulated_variants["ANNOTATION"] != "non_coding_transcript_exon_variant"]
 
-annotation_counts = protein_coding_annotated_simulated_variants[["STRAIN", "TISSUE", "AGE_BIN",\
-                                                  "SIM_RUN", "GENE", "MUT_TYPE", \
-                                                  "ANNOTATION"]].groupby(["STRAIN", "TISSUE", "AGE_BIN", "SIM_RUN", "GENE", "ANNOTATION"]).size()
-
-annotation_counts = annotation_counts.reset_index()
-annotation_counts.rename(columns = {0: "COUNT"}, inplace = True)
-
 if args.wo_hfp:
 	print("wo hfp")
-	output_annotated_simulated_variants = "output/{}_wo_hfp_simulated_annotation_counts".format(strain)
+	output_protein_coding_annotated_simulated_variants = "output/{}_wo_hfp_simulations_vcf".format(strain)
 else:
 	print("has hfp")
-	output_annotated_simulated_variants = "output/{}_simulated_annotation_counts".format(strain)
+	output_protein_coding_annotated_simulated_variants = "output/{}_simulations_vcf".format(strain)
 
-annotation_counts.to_csv(output_annotated_simulated_variants, header = True, index = False, sep = "\t")
+protein_coding_annotated_simulated_variants.to_csv(output_protein_coding_annotated_simulated_variants, header = True, index = False, sep = "\t")
