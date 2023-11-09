@@ -1,0 +1,21 @@
+rule all:
+	input:
+		"output/final/somatic_mutations.vcf",
+		"output/final/haplotype_mutations.vcf"
+
+rule merge_vcfs:
+	input:
+		path = "dcs_vcf_files"
+	output:
+		"output/intermediate/all_muts.vcf"
+	shell:
+		"bash processing_scripts/merge_vcfs.sh {input.path} AKR_O1_Brain.dcs.vcf all_muts.vcf ../output/intermediate/"
+
+rule reformat_and_filter_vcf:
+	input:
+		"output/intermediate/all_muts.vcf"
+	output:
+		"output/final/somatic_mutations.vcf",
+		"output/final/haplotype_mutations.vcf"
+	script:
+		"processing_scripts/reformatting_and_filtering_vcf.py"
