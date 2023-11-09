@@ -1,0 +1,91 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Goal: Create a master df of our hn/hs ratios and their significance 
+
+```{r}
+library(tidyverse)
+```
+
+
+```{r}
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/files/"
+
+agg_w_dloop_file = "../files/hNhS_per_gene_pvals_w_dloop.txt"
+agg_w_dloop = read.table(agg_w_dloop_file, sep = "\t", header = TRUE)
+
+agg_wo_dloop_file = "../hnhs_wo_dloop/files/hNhS_per_gene_pvals_wo_dloop.txt"
+agg_wo_dloop = read.table(agg_wo_dloop_file, sep = "\t", header = TRUE)
+
+per_bin_file = "files/per_bin_hnhs_pvals.txt"
+per_bin = read.table(per_bin_file, sep = "\t", header = TRUE)
+
+```
+
+```{r}
+agg_w_dloop %>%
+  filter(P_ADJ < 0.01)
+
+```
+```{r}
+
+agg_wo_dloop %>%
+  filter(P_ADJ < 0.01)
+
+```
+```{r}
+
+per_bin %>%
+  filter(P_ADJ < 0.01)
+```
+
+```{r}
+
+agg_w_dloop_merge_df = agg_w_dloop %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, GENE, OBS_HNHS, P_ADJ) %>%
+  mutate(BIN = "AGG_W_DLOOP") %>%
+  mutate(POSSIBLE_RATIOS = n()) 
+  
+```
+
+```{r}
+agg_wo_dloop_merge_df = agg_wo_dloop %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, GENE, OBS_HNHS, P_ADJ) %>%
+  mutate(BIN = "AGG_WO_DLOOP") %>%
+  mutate(POSSIBLE_RATIOS = n())
+```
+
+```{r}
+rm(agg_w_dloop, agg_wo_dloop)
+```
+
+```{r}
+
+per_bin_merge_df = per_bin %>%
+  select(STRAIN, TISSUE, AGE_BIN, GENE, OBS_RATIO, P_ADJ, BIN) %>%
+  group_by(BIN) %>%
+  mutate(POSSIBLE_RATIOS = n()) %>%
+  rename(OBS_HNHS = OBS_RATIO)
+
+```
+
+```{r}
+
+selection_supertable = rbind(per_bin_merge_df, agg_wo_dloop_merge_df, agg_w_dloop_merge_df)
+
+```
+
+```{r}
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+write.table(selection_supertable, file = paste(outdir_files,"/selection_analyses_summary_table.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```

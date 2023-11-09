@@ -1,0 +1,25 @@
+configfile: "config.json"
+
+rule all:
+	input:
+		expand("output/bamfiles/{sample}.bam", sample = config["samples"]),
+		expand("output/bamfiles/{sample}.done", sample = config["samples"])	
+
+rule FastqToBam:
+	input:
+		fn1=lambda wildcards: "Conplastic_Strains_Symlinks/{sample}_R1_001.fastq.gz".format(sample=wildcards.sample),
+		fn2=lambda wildcards: "Conplastic_Strains_Symlinks/{sample}_R2_001.fastq.gz".format(sample=wildcards.sample)
+	output:
+		fn_out="output/bamfiles/{sample}.bam",
+		logger="output/bamfiles/{sample}.done"
+	shell:
+		"""java \
+			-Xmx20000m -jar \
+			-Djava.io.tmpdir=$PWD/ \
+			~/local_modules/picard/build/libs/picard.jar \
+			FastqToSam \
+			SAMPLE_NAME={wildcards.sample} \
+			F1={input.fn1} \
+			F2={input.fn2} \
+			O={output.fn_out};
+		echo "The bamfile was completely built yay!" > {output.logger}"""
