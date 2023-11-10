@@ -1,0 +1,248 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/files/"
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/figures/"
+
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+binned_muts_file ="files/mut_type_counts_bins_assigned.txt"
+binned_muts = read.table(binned_muts_file, header=TRUE, stringsAsFactors = FALSE)
+```
+
+```{r}
+#we are parsing the information from our supertable to annotate each variant that has already been designated a bin label 
+annotation_merge = supertable %>% 
+  select(STRAIN, TISSUE, AGE_BIN, VARIANT_TYPE, START, REF, ALT, ANNOTATION) %>%
+  filter(VARIANT_TYPE == "SNV") %>%
+  mutate(MUT_TYPE = paste(REF, ALT, sep = ">")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, MUT_TYPE, ANNOTATION)
+
+```
+
+
+```{r}
+
+all_conds_counts = binned_muts %>%
+  left_join(annotation_merge, by = c("STRAIN", "TISSUE", "AGE_BIN", "START", "MUT_TYPE")) %>%
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, BIN, ANNOTATION, COND_ALT_ALLELE_COUNT_AT_POS) %>%
+  #we only want gene coding regions
+  filter(ANNOTATION != "non_coding_transcript_exon_variant") %>%
+  #we want to count the number of each mutation type (syn or nsyn in each bin)
+  group_by(STRAIN, TISSUE, AGE_BIN, BIN, ANNOTATION) %>%
+  #making sure we count all the alleles
+  summarise(COUNT = sum(COND_ALT_ALLELE_COUNT_AT_POS))
+
+```
+
+We want to fill in all conditions so that we can appropriately average across conditions
+```{r}
+condition_lst = (all_conds_counts %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN) %>%
+  unique() %>%
+  mutate(COND = paste(STRAIN, TISSUE, AGE_BIN, sep = "_")))$COND
+
+CONDITION = rep(condition_lst, each = 10)
+BIN = rep(unique(all_conds_counts$BIN), each = 2)
+ANNOTATION = rep(c("missense_variant", "synonymous_variant"), 5)
+
+dummy_df = cbind(data.frame(CONDITION), data.frame(BIN), data.frame(ANNOTATION)) %>%
+  separate(CONDITION, into = c("STRAIN", "TISSUE", "AGE_BIN"))
+
+```
+
+
+```{r}
+plotting_df = dummy_df %>%
+  left_join(all_conds_counts, by = c("STRAIN", "TISSUE", "AGE_BIN", "BIN", "ANNOTATION")) %>%
+  mutate(COUNT = ifelse(is.na(COUNT), 0, COUNT)) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, ANNOTATION) %>%
+  #counting the number of mutations overall in a given annotation
+  mutate(TOTAL_COUNT = sum(COUNT)) %>%
+  ungroup() %>%
+  mutate(PROP = COUNT/TOTAL_COUNT) %>%
+  select(STRAIN, BIN, ANNOTATION, PROP) %>%
+  group_by(STRAIN, BIN, ANNOTATION) %>%
+  summarise(AVG = mean(PROP), SE = sd(PROP)/sqrt(n()))
+
+plotting_df$BIN = factor(plotting_df$BIN, levels = c("upper-5e-5", "upper-1e-4", "upper-1e-3", "upper-1e-2", "upper-1"))
+
+plotting_df$STRAIN = factor(plotting_df$STRAIN, levels = c("B6", "AKR", "ALR", "FVB", "NZB"))
+
+
+```
+
+
+```{r}
+
+sfs_annot_bins = ggplot(plotting_df, aes(x = BIN, y = AVG, fill = ANNOTATION))
+
+sfs_annot_bins = sfs_annot_bins + 
+  geom_bar(stat = "identity", position = position_dodge()) + 
+  geom_errorbar(aes( ymin=AVG-SE, ymax=AVG+SE), width = 0.1, position = position_dodge(0.9)) +
+  theme_bw() + 
+  facet_wrap(.~STRAIN, nrow = 1) + 
+  scale_fill_manual(name = "Annotation", labels = c("Missense", "Synonymous"), values = c("#9e6374", "#efbc82")) + 
+  xlab("Frequency bin") + 
+  ylab("Average proportion") + 
+  scale_x_discrete(labels = c("upper-5e-5" = "(0, 5e-5]", "upper-1e-4" = "(5e-5, 1e-4]", "upper-1e-3" = "(1e-4, 1e-3]", "upper-1e-2" = "(1e-3, 1e-2]", "upper-1" = "(1e-2, 1]")) + 
+  theme(strip.background = element_blank(), 
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1), 
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/strain_sfs_nonsyn_syn_muts.pdf", sep=""),width=9,height=3)
+print(sfs_annot_bins)
+dev.off()
+
+pdf(paste(outdir_figures,"/leg_strain_sfs_nonsyn_syn_muts.pdf", sep=""),width=6,height=3)
+print(sfs_annot_bins + theme(legend.position = "right"))
+dev.off()
+
+```
+
+Now we want to look at the null spectra for nonsyn and syn mutations 
+
+```{r}
+
+null_annot_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/annotating_variants/output/annotated_all_possible_variants.txt"
+null_annot = read.table(null_annot_file, header=TRUE, stringsAsFactors = FALSE)
+
+
+```
+
+
+```{r}
+
+null_plotting = null_annot %>% 
+  select(REF, ALT, ANNOTATION) %>%
+  mutate(MUT_TYPE = paste(REF, ALT, sep = ">")) %>%
+  #filter out non-coding regions
+  filter(ANNOTATION != "non_coding_transcript_exon_variant") %>%
+  select(MUT_TYPE, ANNOTATION) %>%
+  group_by(MUT_TYPE, ANNOTATION) %>% 
+  #the count of each mutation in each annotation class 
+  summarise(COUNT = n()) %>%
+  ungroup() %>%
+  #calculating the number mutations in each annotation class
+  group_by(ANNOTATION) %>%
+  mutate(TOTAL_COUNT = sum(COUNT)) %>%
+  ungroup() %>%
+  #proportion of each mut type in the annotation class
+  mutate(PROP = COUNT / TOTAL_COUNT) 
+  
+null_plotting$MUT_TYPE = factor(null_plotting$MUT_TYPE, levels =  c("G>A" ,"C>T", "G>T" , "C>A", "T>C", "A>G", "G>C", "C>G", "T>A" , "A>T","T>G", "A>C"))
+
+```
+
+```{r}
+sum((null_plotting %>%
+  filter(ANNOTATION == "synonymous_variant"))$PROP)
+
+```
+
+```{r}
+
+null_mut_spectra_plot = ggplot(null_plotting, aes(x = MUT_TYPE, y = PROP, fill = ANNOTATION))
+
+null_mut_spectra_plot = null_mut_spectra_plot + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  theme_bw() +
+  xlab("Mutation type") + 
+  ylab("Proportion") +
+  scale_fill_manual(name = "Annotation", labels = c("Missense", "Synonymous"), values = c("#9e6374", "#efbc82")) + 
+  theme(axis.text.x = element_text(angle = 90),
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/null_missense_props.pdf", sep=""),width=3,height=2.5)
+print(null_mut_spectra_plot)
+dev.off()
+
+pdf(paste(outdir_figures,"/leg_null_missense_props.pdf", sep=""),width=4,height=3)
+print(null_mut_spectra_plot + theme(legend.position = "bottom"))
+dev.off()
+
+
+```
+
+Now we want to plot the observed NS and Syn mutational spectra: 
+
+```{r}
+
+obs_spectra = binned_muts %>%
+  left_join(annotation_merge, by = c("STRAIN", "TISSUE", "AGE_BIN", "START", "MUT_TYPE")) %>%
+  filter(ANNOTATION != "non_coding_transcript_exon_variant") %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUT_TYPE, ANNOTATION, COND_ALT_ALLELE_COUNT_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, MUT_TYPE, ANNOTATION) %>%
+  summarise(COUNT = sum(COND_ALT_ALLELE_COUNT_AT_POS)) %>%
+  ungroup() %>%
+  #we sum the number of mutations in an annotation class
+  group_by(STRAIN, TISSUE, AGE_BIN, ANNOTATION) %>%
+  mutate(TOTAL_COUNT = sum(COUNT))
+
+```
+
+We need to create a dummy df to capture conditions x mut type x annotation that have 0 counts 
+
+```{r}
+
+#condition_lst has all 29 possible conditions 
+
+MUT_TYPE = rep(unique(obs_spectra$MUT_TYPE), each = 2)
+ANNOTATION = rep(c("missense_variant", "synonymous_variant"), 12)
+
+dummy_df_mut_type_annot = cbind(data.frame(MUT_TYPE), data.frame(ANNOTATION)) %>%
+  mutate(AGG = paste(MUT_TYPE, ANNOTATION, sep = "-"))
+
+annot_mut_type_info = rep((dummy_df_mut_type_annot$AGG), 29)
+CONDITION = rep(condition_lst, each = 24)
+
+dummy_df_all_info = cbind(data.frame(annot_mut_type_info), data.frame(CONDITION)) %>%
+  separate(CONDITION, into = c("STRAIN", "TISSUE", "AGE_BIN"), sep = "_") %>%
+  separate(annot_mut_type_info, into = c("MUT_TYPE", "ANNOTATION"), sep = "-")
+
+```
+
+```{r}
+obs_mut_spectra_plotting_df = dummy_df_all_info %>%
+  left_join(obs_spectra, by = c("STRAIN", "TISSUE", "AGE_BIN", "MUT_TYPE", "ANNOTATION")) %>%
+  mutate(COUNT = ifelse(is.na(COUNT), 0, COUNT), TOTAL_COUNT = ifelse(is.na(TOTAL_COUNT), 1, TOTAL_COUNT)) %>%
+  ungroup() %>%
+  mutate(PROP = COUNT/TOTAL_COUNT) %>%
+  select(STRAIN, MUT_TYPE, ANNOTATION, PROP) %>%
+  group_by(STRAIN, MUT_TYPE, ANNOTATION) %>%
+  summarise(AVG = mean(PROP), SE = sd(PROP)/sqrt(n()))
+
+obs_mut_spectra_plotting_df$MUT_TYPE = factor(obs_mut_spectra_plotting_df$MUT_TYPE, levels =  c("G>A" ,"C>T", "G>T" , "C>A", "T>C", "A>G", "G>C", "C>G", "T>A" , "A>T","T>G", "A>C"))
+obs_mut_spectra_plotting_df$STRAIN = factor(obs_mut_spectra_plotting_df$STRAIN, levels = c("B6", "AKR", "ALR", "FVB", "NZB"))
+
+```
+
+```{r}
+
+obs_mutation_spectra = ggplot(obs_mut_spectra_plotting_df, aes(x = MUT_TYPE, y = AVG, color = ANNOTATION)) + 
+  geom_point(size = 0.5) + 
+  geom_errorbar(aes( ymin=AVG-SE, ymax=AVG+SE), width = 0.1) + 
+   scale_color_manual(name = "Annotation", labels = c("Missense", "Synonymous"), values = c("#9e6374", "#efbc82")) + 
+  xlab("Mutation type") + 
+  ylab("Average proportion") + 
+  theme_bw() + 
+  facet_wrap(.~STRAIN, nrow = 5) +
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 90), 
+        legend.position = "bottom")
+
+pdf(paste(outdir_figures,"/obs_mut_spectra.pdf", sep=""),width=3,height=5.5)
+print(obs_mutation_spectra)
+dev.off()
+
+
+```
