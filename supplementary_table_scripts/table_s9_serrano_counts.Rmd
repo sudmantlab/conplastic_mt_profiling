@@ -1,0 +1,86 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+outdir_figures = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/figures"
+
+outdir_files <- "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/files"
+
+somatic_muts_file = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/somatic_mutations.vcf"
+
+#all mutations that are not our genotypes for each strain 
+somatic_muts = read.table(somatic_muts_file, header = TRUE, stringsAsFactors = FALSE)
+
+```
+
+Calculating the de novo mutation count based on Kennedy's approach -- we need to filter out the samples we do not include in our analysis 
+
+```{r}
+total_de_novo_muts = somatic_muts %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  filter(SAMPLE != "B6_Y3_Heart") %>%
+  filter(SAMPLE != "B6_Y5_Liver", SAMPLE != "B6_Y6_Liver", SAMPLE != "B6_Y7_Liver", SAMPLE != "B6_Y8_Liver") %>% 
+  filter(AGE_BIN != "MID") %>%
+  #filter variants with a depth < 100
+  #we remove ~200 mutations 
+  filter(ALT_ALLELE_DEPTH < 100) %>%
+  #calculate the mutation frequency at each position for each sample
+  mutate(MUT_FREQ = ALT_ALLELE_DEPTH/READ_DEPTH_AT_POS) %>%
+  #filter any mutation with a frequency > 1% 
+  filter(MUT_FREQ < 0.01) %>%
+  #scoring each mutation once
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, READ_DEPTH_AT_POS) %>%
+  unique()
+
+print(total_de_novo_muts)
+```
+Filtering our somatic mutations for SNVs: 
+
+```{r}
+de_novo_SNVs = total_de_novo_muts %>%
+  filter(nchar(REF) == 1) %>%
+  filter(nchar(ALT) == 1)
+```
+
+Calculating the average number of de novo mutations per sample 
+```{r}
+
+mean((de_novo_SNVs %>%
+  select(SAMPLE) %>% 
+  group_by(SAMPLE) %>% 
+  summarise(MUT_COUNT = n()))$MUT_COUNT)
+
+```
+Calculating the average number of de novo mutations per condition
+```{r}
+
+mean((de_novo_SNVs %>%
+  select(STRAIN, TISSUE, AGE_BIN, START) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>%
+  summarise(MUT_COUNT = n()))$MUT_COUNT)
+
+```
+We calculate the count of mutations that have heteroplasmic clones, scoring each mutation type at a given position once. We also look at the SNV heteroplasmic clone count. 
+
+```{r}
+somatic_muts %>%
+  filter(SAMPLE != "B6_Y3_Heart") %>%
+  filter(SAMPLE != "B6_Y5_Liver", SAMPLE != "B6_Y6_Liver", SAMPLE != "B6_Y7_Liver", SAMPLE != "B6_Y8_Liver") %>% 
+  filter(AGE_BIN != "MID") %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  mutate(MUT_FREQ = ALT_ALLELE_DEPTH/READ_DEPTH_AT_POS) %>%
+  #filter any mutation with a frequency > 1% 
+  filter(MUT_FREQ < 0.01) %>%
+  filter(ALT_ALLELE_DEPTH > 2) %>%
+  filter(AGE_BIN == "OLD") %>%
+  filter(nchar(REF) == 1) %>%
+  filter(nchar(ALT) == 1)
+```

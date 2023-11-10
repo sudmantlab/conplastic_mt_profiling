@@ -22,6 +22,20 @@ supertable_file <-"~/Documents/Science/Analyses/Conplastic_Strains/files_and_ana
 
 supertable <- read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
 
+duplex_bp_depth_file = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/mut_freq_per_type.csv"
+duplex_bp_depth <- read.table(duplex_bp_depth_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+Calculating the total duplex bp sequenced: 40.4 billion bp 
+
+```{r}
+sum((duplex_bp_depth %>% 
+  filter(grepl("Total", MUTATION_TYPE)) %>%
+  filter(MUTATION_CLASS == "SNV") %>%
+  filter(SAMPLE != "B6_Y3_Heart") %>%
+  filter(SAMPLE != "B6_Y5_Liver", SAMPLE != "B6_Y6_Liver", SAMPLE != "B6_Y7_Liver", SAMPLE != "B6_Y8_Liver") %>% 
+  filter(AGE_BIN != "MID"))$DENOMINATOR)
 ```
 
 We calculate the average read depth across the mt-genome for each sample. This average represents the average number of duplex mt-genomes sequenced given that each mt-genome has a unique molecular identifier. 
@@ -34,6 +48,18 @@ sample_depth = supertable %>%
   summarise(AVG_DUP_DEPTH = mean(READ_DEPTH_AT_POS))
 ```
 
+```{r}
+
+sample_depth %>%
+  ungroup() %>%
+  select(AVG_DUP_DEPTH) %>%
+  summarise(mean(AVG_DUP_DEPTH))
+```
+Calculating the range for the average duplex depth across the mt-genome
+```{r}
+sample_depth %>%
+  filter(AVG_DUP_DEPTH < 10123)
+```
 
 ```{r}
 
@@ -134,41 +160,4 @@ write.table(sample_depth, file = paste(outdir_files,"/sample_duplex_depth.txt", 
 
 write.table(cond_depth, file = paste(outdir_files,"/experimental_condition_duplex_depth.txt", sep = ""), sep = "\t", quote = F, row.names = F)
 
-```
-
-~~~~~~SCRATCH CODE~~~~~~~~~~
-
-This is a second method for estimating duplex depth from the raw number of duplex sequences. Note if our reads overlap this would give ~ 2-fold higher estimate.  
-
-```{r}
-
-dcs_read_depth_file <-"~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/files/duplex_read_depth.csv"
-
-dcs_read_depth <- read.table(dcs_read_depth_file, header=TRUE, stringsAsFactors = FALSE)
-
-```
-
-Filtering out the samples we will not be using in our analysis: 
-
-```{r}
-
-filtered_dcs_read_depth = dcs_read_depth %>%
-  filter(AGE_BIN != "MID") %>%
-  filter(!grepl("B6_Y3_Heart", sample)) %>%
-  filter(!grepl("B6_Y._Liver", sample))
-```
-
-```{r}
-
-#we multiply by the number of bp our reads covered (150x PE reads) and then divide by the length of the mtGenome to obtain the avg_bp_depth per sample 
-setwd(outdir_figures)
-filtered_dcs_read_depth$avg_bp_depth = (filtered_dcs_read_depth$read_count * 300) / 16299
-
-cleaned_dcs_read_depth = filtered_dcs_read_depth %>% 
-  separate(sample, c("STRAIN", "AGE", "TISSUE"), extra = "drop", sep = "_")
-
-mean_per_exp = mean(cleaned_dcs_read_depth$avg_bp_depth)
-print(mean_per_exp)
-range(cleaned_dcs_read_depth$avg_bp_depth)
-sum(cleaned_dcs_read_depth$avg_bp_depth)
 ```
