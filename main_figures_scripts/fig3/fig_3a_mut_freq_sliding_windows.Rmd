@@ -71,6 +71,38 @@ norm_seq_depth = supertable %>%
   mutate(CONDITION_MUT_COUNT_AT_POS = ifelse(CONDITION_MUT_FREQ_AT_POS < FLOOR_MIN_MUT_FREQ_AT_POS, 0, CONDITION_MUT_COUNT_AT_POS)) 
   
 ```  
+We want to create a freq v coverage plot for the OriL:
+
+```{r}
+oril_cxmf_df = norm_seq_depth %>%
+  ungroup() %>%
+  filter(CONDITION_MUT_FREQ_AT_POS < 0.001) %>% 
+  mutate(NORM_CONDITION_MUT_FREQ_AT_POS = CONDITION_MUT_COUNT_AT_POS/CONDITION_READ_DEPTH_AT_POS) %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, CONDITION_READ_DEPTH_AT_POS, NORM_CONDITION_MUT_FREQ_AT_POS) %>%
+  filter(START > 5159 & START < 5191) %>%
+  select(STRAIN, TISSUE, AGE_BIN, CONDITION_READ_DEPTH_AT_POS, NORM_CONDITION_MUT_FREQ_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>% 
+  summarise(AVG_DP = mean(CONDITION_READ_DEPTH_AT_POS), AVG_FREQ = mean(NORM_CONDITION_MUT_FREQ_AT_POS))
+```
+
+```{r}
+oriL_cxmf_plot = ggplot(oril_cxmf_df) 
+
+oriL_cxmf_plot = oriL_cxmf_plot + 
+  geom_point(aes(x=AVG_DP, y= AVG_FREQ, shape= TISSUE, color = STRAIN)) +
+  theme_bw(base_size= 16) +
+  facet_wrap(AGE_BIN~., nrow = 2) + 
+  xlim(20000, 150000) + 
+  theme(axis.text.x = element_text(angle = 45, size = 10),
+        axis.text.y = element_text(size = 10), 
+        legend.position = "bottom",
+        legend.title = element_blank())
+
+pdf(paste(outdir_figures,"/oriL_cxmf.pdf",sep=""),width=8,height=5)
+print(oriL_cxmf_plot)
+dev.off()
+
+```
 
 Calculating the average mutation frequency in 150 bp windows without the high frequency positions
 ```{r}

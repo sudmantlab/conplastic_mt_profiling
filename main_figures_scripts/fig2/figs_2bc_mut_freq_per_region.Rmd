@@ -168,8 +168,11 @@ summary_df = wo_hfps_region_mut_freq_df %>%
   left_join(avg_read_depth_per_region, by =  c("STRAIN", "TISSUE", "AGE_BIN", "TYPE")) %>% 
   mutate(WO_HFPS_PERC_REGION_MUTATED = WO_HFPS_CONDITION_MUT_COUNT_REGION/(LENGTH_OF_TYPE*AVG_READ_DEPTH_REGION)) %>%
   mutate(HFPS_PERC_REGION_MUTATED = CONDITION_MUT_COUNT_REGION/(LENGTH_OF_TYPE*AVG_READ_DEPTH_REGION))
+```
 
-write.table(summary_df, file = paste(outdir_files,"/mut_freq_per_region.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+```{r}
+
+write.table(summary_df, file = paste(outdir_files,"/mut_freq_per_region.txt", sep = ""), sep = "\t", quote = F, row.names = F)
 
 ```
 
@@ -190,6 +193,24 @@ summary_df %>%
   group_by(AGE_BIN) %>% 
   summarise(AVG_FOLD_CHANGE = mean(FOLD_CHANGE), MEDIAN_FOLD_CHANGE = median(FOLD_CHANGE))
 
+
+```
+Avg % region mutated in OriL compared to the functional coding regions: 
+
+```{r}
+summary_df %>% 
+  ungroup() %>% 
+  filter(TYPE != "D-Loop") %>% 
+  mutate(TYPE = ifelse(TYPE == "OriL", TYPE, "RNA_CODING")) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, TYPE) %>%
+  summarise(SUM_MUT_COUNT_WO_HFPS = sum(WO_HFPS_CONDITION_MUT_COUNT_REGION), AVG_DEPTH = mean(AVG_READ_DEPTH_REGION), SUM_LENGTH_OF_REGIONS = sum(LENGTH_OF_TYPE)) %>% 
+  mutate(PERC_REGION_MUT = SUM_MUT_COUNT_WO_HFPS/(AVG_DEPTH * SUM_LENGTH_OF_REGIONS)) %>%
+  select(STRAIN, TISSUE, AGE_BIN, TYPE, PERC_REGION_MUT) %>%
+  pivot_wider(values_from = PERC_REGION_MUT, names_from = TYPE) %>% 
+  mutate(FOLD_CHANGE = OriL/RNA_CODING) %>%
+  select(STRAIN, TISSUE, AGE_BIN, FOLD_CHANGE) %>% 
+  group_by(AGE_BIN) %>% 
+  summarise(AVG_FOLD_CHANGE = mean(FOLD_CHANGE), MEDIAN_FOLD_CHANGE = median(FOLD_CHANGE))
 
 ```
 
