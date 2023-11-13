@@ -134,7 +134,7 @@ Write out the mutation type freq calculations
 outdir_files =  "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/change_in_mut_freq/files"  
 
 #summary df of mutation type frequencies without the HFPs in our data 
-write.table(summary_df, file = paste(outdir_files,"/mut_freq_per_type_wo_HFPs.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+write.table(summary_df, file = paste(outdir_files,"/mut_freq_per_type_wo_HFPs.txt", sep = ""), sep = "\t", quote = F, row.names = F)
 
 ```
 
