@@ -1,0 +1,478 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(ggridges)
+```
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/reversions/scripts/")
+
+length_mtdna = 16299
+
+outdir_figures = "../figures/"
+outdir_files = "../files/"
+
+#this file DOES NOT CONTAIN HAPLOTYPE SITES
+supertable_file = "../../input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+#this file contains REVERSION haplotype sites (ALT > B6 REF)
+haplotype_reversions_file = "../files/corrected_reversion_counts.txt" 
+haplotype_reversions = read.table(haplotype_reversions_file, header = TRUE, stringsAsFactors = FALSE)
+
+#this file contains OTHER ALT alleles at haplotype sites (not B6 allele = reversion)
+other_alt_alleles_haplotype_sites_file = "../../input_files/haplotype_sites_nonreversion_muts.txt" 
+other_alt_alleles_haplotype_sites = read.table(other_alt_alleles_haplotype_sites_file, header = TRUE, stringsAsFactors = FALSE)
+```
+
+Calculating the reversion allele frequency 
+
+```{r}
+
+reversion_count = haplotype_reversions %>% 
+  #note: the reversion allele freq is the ref allele depth -- B6 allele
+  select(STRAIN, TISSUE, AGE_BIN, START, FLOORED_CORR_REV_ALLELE_DEPTH, CORR_READ_DEPTH) %>% 
+  mutate(SITE_TYPE = "HAPLO_SITE") %>% 
+  rename("COND_REV_ALLELE_DEPTH" = FLOORED_CORR_REV_ALLELE_DEPTH)
+
+```
+
+Calculating the other allele frequencies, including the haplotype site non-reversion alleles 
+
+1) Let's bind the supertable and non-reversion alleles at haplotype sites
+```{r}
+other_alt_alleles_haplotype_sites = other_alt_alleles_haplotype_sites %>% 
+  mutate(STRAIN = recode(STRAIN, "F" = "FVB")) %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS)
+
+#information for background sites 
+somatic_muts_nonhaplotype_sites = supertable %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS)
+
+somatic_nonreversion = rbind(somatic_muts_nonhaplotype_sites, other_alt_alleles_haplotype_sites)
+
+```
+
+```{r}
+rm(other_alt_alleles_haplotype_sites, supertable, somatic_muts_nonhaplotype_sites, haplotype_reversions)
+
+```
+
+We want to calculate the mutation count at each position (i.e. aggregate the count of all possible occuring mutations)
+```{r}
+somatic_mut_count = somatic_nonreversion %>% 
+  #here we eliminate redundancy from the same start position being in two gene regions 
+  unique() %>% 
+  #first we aggregate the number of mutations at a site within a sample (i.e. sum the count of different mutation types)
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>% 
+  group_by(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS) %>% 
+  summarise(SAMPLE_SOMATIC_MUT_COUNT = sum(ALT_ALLELE_DEPTH)) %>% 
+  ungroup() %>% 
+  #now we want to aggregate the read depth and the mut count in a condition 
+  select(STRAIN, TISSUE, AGE_BIN, START, SAMPLE_SOMATIC_MUT_COUNT, READ_DEPTH_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, START) %>% 
+  summarise(COND_SOMATIC_MUT_COUNT = sum(SAMPLE_SOMATIC_MUT_COUNT), COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS))
+```
+
+```{r}
+
+merged_mutations = full_join(somatic_mut_count, reversion_count, by = c("STRAIN", "TISSUE", "AGE_BIN", "START"))
+
+```
+
+```{r}
+#we have filled in the fields so that we can note 0 if there is not a somatic mutation present, 0 if there is not a reversion mutation present, and the site type if it's not a haplotype site
+filtered_merged_mutations = merged_mutations %>% 
+  #we filter out B6 since we are only interested in the conplastic strains
+  filter(STRAIN != "B6") %>% 
+  mutate(COND_SOMATIC_MUT_COUNT = ifelse(is.na(COND_SOMATIC_MUT_COUNT), 0, COND_SOMATIC_MUT_COUNT),
+         COND_REV_ALLELE_DEPTH = ifelse(is.na(COND_REV_ALLELE_DEPTH), 0, COND_REV_ALLELE_DEPTH),
+         CORR_READ_DEPTH = ifelse(is.na(CORR_READ_DEPTH), COND_READ_DEPTH_AT_POS, CORR_READ_DEPTH),
+         SITE_TYPE = ifelse(is.na(SITE_TYPE), "NOT_HAPLO", SITE_TYPE)) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, SITE_TYPE, COND_SOMATIC_MUT_COUNT, COND_REV_ALLELE_DEPTH, CORR_READ_DEPTH) 
+
+```
+
+```{r}
+
+mut_freq = filtered_merged_mutations %>% 
+  mutate(MUT_COUNT = COND_SOMATIC_MUT_COUNT + COND_REV_ALLELE_DEPTH) %>% 
+  mutate(MUT_FREQ_AT_POS = MUT_COUNT / CORR_READ_DEPTH)
+
+```
+
+We want to calculate the % of alleles at haplotype sites that are reversion alleles 
+
+```{r}
+mut_freq %>%
+  ungroup() %>%
+  select(STRAIN, SITE_TYPE, COND_REV_ALLELE_DEPTH, MUT_COUNT) %>% 
+  filter(SITE_TYPE == "HAPLO_SITE") %>% 
+  filter(MUT_COUNT > 0) %>%
+  mutate(PROP_REV = COND_REV_ALLELE_DEPTH/MUT_COUNT) %>%
+  select(STRAIN, PROP_REV) %>% 
+  group_by(STRAIN) %>%
+  summarise(AVG = mean(PROP_REV))
+
+```
+
+Normalizing mutation frequency for sequencing depth so that we can compare mutation freq across ages
+```{r}
+normalized_mut_freq = mut_freq %>% 
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, SITE_TYPE, MUT_FREQ_AT_POS, CORR_READ_DEPTH) %>% 
+  mutate(MIN_FREQ_AT_POS = 1/CORR_READ_DEPTH) %>% 
+  group_by(STRAIN, TISSUE, START, SITE_TYPE) %>% 
+  mutate(FLOOR_FREQ_AT_POS_BW_AGE = max(MIN_FREQ_AT_POS)) %>% 
+  mutate(NORM_MUT_FREQ_AT_POS = ifelse(MUT_FREQ_AT_POS < FLOOR_FREQ_AT_POS_BW_AGE, 0, MUT_FREQ_AT_POS)) %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, SITE_TYPE, MUT_FREQ_AT_POS, NORM_MUT_FREQ_AT_POS) %>% 
+  arrange(STRAIN, TISSUE, AGE_BIN, START) 
+
+```
+
+We want to calculate the avg fold difference in mut freq between haplotype sites and background sites
+
+```{r}
+normalized_mut_freq %>% 
+  select(STRAIN, SITE_TYPE, MUT_FREQ_AT_POS) %>% 
+  group_by(STRAIN, SITE_TYPE) %>% 
+  #we take the average across tissues
+  summarise(AVG = mean(MUT_FREQ_AT_POS)) %>% 
+  pivot_wider(names_from = SITE_TYPE, values_from = AVG) %>% 
+  mutate(FOLD_DIFF = HAPLO_SITE/NOT_HAPLO)
+
+```
+
+Exporting for future analyses 
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/reversions")
+
+outdir_files = "files"
+
+write.table(normalized_mut_freq, file = paste(outdir_files,"/corr_NUMT_freqs_normalized_mut_freq_per_pos_w_reversions.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+Refactoring so that wildtype strain is the first in figure 
+
+```{r}
+normalized_mut_freq$STRAIN = factor(normalized_mut_freq$STRAIN, level = c("AKR", "ALR", "FVB", "NZB"))
+
+```
+
+Statistics: wilcoxon test to compare the averages of the background and haplotype sites for NZB 
+We have to run this test for every age and tissue combination 
+
+```{r}
+
+nzb_wilcoxon = normalized_mut_freq %>%
+  filter(STRAIN == "NZB") %>%
+  mutate(LABEL = paste(AGE_BIN, TISSUE, SITE_TYPE, sep = "_"))
+
+```
+
+```{r}
+
+groups = list(c("OLD_Brain_NOT_HAPLO", "OLD_Brain_HAPLO_SITE"),
+                c("YOUNG_Brain_NOT_HAPLO", "YOUNG_Brain_HAPLO_SITE"),
+                c("OLD_Heart_NOT_HAPLO", "OLD_Heart_HAPLO_SITE"),
+                c("YOUNG_Heart_NOT_HAPLO", "YOUNG_Heart_HAPLO_SITE"),
+                c("OLD_Liver_NOT_HAPLO", "OLD_Liver_HAPLO_SITE"),
+                c("YOUNG_Liver_NOT_HAPLO", "YOUNG_Liver_HAPLO_SITE"))
+
+```
+
+```{r}
+
+combos = groups %>%
+  set_names(map_chr(., ~ paste(., collapse = "_"))) 
+
+```
+
+Now to run the Wilcoxon Rank Sum Test
+
+```{r}
+
+p_values_nzb = map_df(combos, function(y) {
+              filter(nzb_wilcoxon, LABEL %in% y) %>% 
+                wilcox.test(NORM_MUT_FREQ_AT_POS ~ LABEL, data = .) %>% 
+                broom::tidy()
+              }, .id = "contrast") %>%
+            mutate(p_adj = p.adjust(p.value, method = "BH")) %>% 
+  mutate(SIG_STATUS = ifelse(p_adj < 0.01, "SIG", "N.S.")) %>%
+  mutate(STRAIN = "NZB") %>% 
+  mutate(TISSUE = case_when(grepl("Brain", contrast) ~ "Brain", 
+         grepl("Heart", contrast) ~ "Heart",
+         TRUE ~ "Liver")) %>%
+  mutate(AGE_BIN = ifelse(grepl("OLD", contrast), "OLD", "YOUNG")) %>%
+  mutate(P_ADJ_LABEL = scientific(p_adj, digits = 2)) 
+
+
+```
+
+We create a label for the norm mut freq at each haplotype position in a given condition for all strains except NZB
+```{r}
+
+comp_haplo_site_freq = normalized_mut_freq %>%
+  filter(SITE_TYPE == "HAPLO_SITE") %>%
+  filter(STRAIN != "NZB") %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, NORM_MUT_FREQ_AT_POS) %>%
+  mutate(LABEL = paste(STRAIN, START, sep = "_")) %>%
+  rename(HAPLO_MUT_FREQ = NORM_MUT_FREQ_AT_POS) %>%
+  select(STRAIN, TISSUE, AGE_BIN, LABEL, HAPLO_MUT_FREQ) 
+
+```
+
+```{r}
+
+FVB_hap_sites = normalized_mut_freq %>%
+  filter(STRAIN == "FVB") %>%
+  filter(SITE_TYPE == "NOT_HAPLO") %>% 
+  left_join((comp_haplo_site_freq %>% filter(STRAIN == "FVB")), by = c("STRAIN", "TISSUE", "AGE_BIN")) %>%
+  pivot_wider(names_from = LABEL, values_from = HAPLO_MUT_FREQ) %>%
+  group_by(TISSUE, AGE_BIN) %>%
+  mutate(TOTAL_POS = n()) %>%
+  ungroup() %>% 
+  mutate(fvb_count_7777 = ifelse(NORM_MUT_FREQ_AT_POS > FVB_7777, 1, 0), fvb_count_9460 = ifelse(NORM_MUT_FREQ_AT_POS > FVB_9460, 1, 0)) %>%
+  select(STRAIN, TISSUE, AGE_BIN, fvb_count_7777, fvb_count_9460, TOTAL_POS) %>%
+  pivot_longer(cols= fvb_count_7777:fvb_count_9460, names_to = "HAP_LABEL", values_to = "COUNT_ABOVE") %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, TOTAL_POS, HAP_LABEL) %>% 
+  summarise(TOTAL_COUNT_ABOVE_FREQ = sum(COUNT_ABOVE)) %>%
+  mutate(p_val = TOTAL_COUNT_ABOVE_FREQ/TOTAL_POS)
+  
+```
+
+```{r}
+
+ALR_hap_sites = normalized_mut_freq %>%
+  filter(STRAIN == "ALR") %>%
+  filter(SITE_TYPE == "NOT_HAPLO") %>% 
+  left_join((comp_haplo_site_freq %>% filter(STRAIN == "ALR")), by = c("STRAIN", "TISSUE", "AGE_BIN")) %>%
+  pivot_wider(names_from = LABEL, values_from = HAPLO_MUT_FREQ) %>%
+  group_by(TISSUE, AGE_BIN) %>%
+  mutate(TOTAL_POS = n()) %>%
+  ungroup() %>% 
+  mutate(alr_count_4738 = ifelse(NORM_MUT_FREQ_AT_POS > ALR_4738, 1, 0), alr_count_9347 = ifelse(NORM_MUT_FREQ_AT_POS > ALR_9347, 1, 0), alr_count_9460 = ifelse(NORM_MUT_FREQ_AT_POS > ALR_9460, 1, 0)) %>%
+  select(STRAIN, TISSUE, AGE_BIN, alr_count_4738, alr_count_9347, alr_count_9460, TOTAL_POS) %>%
+  pivot_longer(cols= alr_count_4738:alr_count_9460, names_to = "HAP_LABEL", values_to = "COUNT_ABOVE") %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, TOTAL_POS, HAP_LABEL) %>% 
+  summarise(TOTAL_COUNT_ABOVE_FREQ = sum(COUNT_ABOVE)) %>%
+  mutate(p_val = TOTAL_COUNT_ABOVE_FREQ/TOTAL_POS)
+  
+```
+
+```{r}
+
+AKR_hap_sites = normalized_mut_freq %>%
+  filter(STRAIN == "AKR") %>%
+  filter(SITE_TYPE == "NOT_HAPLO") %>% 
+  left_join((comp_haplo_site_freq %>% filter(STRAIN == "AKR")), by = c("STRAIN", "TISSUE", "AGE_BIN")) %>%
+  pivot_wider(names_from = LABEL, values_from = HAPLO_MUT_FREQ) %>%
+  group_by(TISSUE, AGE_BIN) %>%
+  mutate(TOTAL_POS = n()) %>%
+  ungroup() %>% 
+  mutate(akr_count_9460 = ifelse(NORM_MUT_FREQ_AT_POS > AKR_9460, 1, 0)) %>%
+  select(STRAIN, TISSUE, AGE_BIN, akr_count_9460, TOTAL_POS) %>%
+  pivot_longer(cols= akr_count_9460, names_to = "HAP_LABEL", values_to = "COUNT_ABOVE") %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, TOTAL_POS, HAP_LABEL) %>% 
+  summarise(TOTAL_COUNT_ABOVE_FREQ = sum(COUNT_ABOVE)) %>%
+  mutate(p_val = TOTAL_COUNT_ABOVE_FREQ/TOTAL_POS)
+  
+```
+
+```{r}
+
+point_background_comp = rbind(FVB_hap_sites, ALR_hap_sites, AKR_hap_sites) %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, HAP_LABEL, p_val) %>%
+  separate(HAP_LABEL, sep = "_", c("L_STRAIN", "COUNT","START")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, p_val) %>%
+  mutate(p_adj = p.adjust(p_val, method = "BH")) %>% 
+  mutate(SIG_STATUS = ifelse(p_adj < 0.01, "SIG", "N.S.")) %>%
+  arrange(desc(SIG_STATUS))
+
+point_background_comp$START = as.numeric(point_background_comp$START)
+
+```
+
+
+```{r}
+dist_mut_freq_df = normalized_mut_freq %>% 
+  filter(NORM_MUT_FREQ_AT_POS > 0) %>% 
+  #we keep HFPs in our calculations
+  #filter(NORM_MUT_FREQ_AT_POS < 1e-3) %>%
+  mutate(NEW_SITE_LABEL = ifelse(AGE_BIN == "OLD", 
+                                 ifelse(SITE_TYPE == "HAPLO_SITE", "Old Haplotype Site", "Old Non-Haplotype Site"), 
+                                 ifelse(SITE_TYPE == "HAPLO_SITE", "Young Haplotype Site", "Young Non-Haplotype Site"))) %>% 
+  mutate(GEOM_TYPE = ifelse(SITE_TYPE == "HAPLO_SITE", ifelse(STRAIN == "NZB", "DIST", "POINT"), "DIST"))
+
+
+plotting_dist_df = dist_mut_freq_df %>% 
+  mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Young", "OLD" = "Old"))
+
+```
+
+```{r}
+library(stringr)
+
+plotting_point_labels = point_background_comp %>%
+  filter(SIG_STATUS == "SIG") %>%
+  mutate(X_POS = -2.5) %>%
+  #mutate(X_POS = ifelse(STRAIN == "ALR", -2.5, X_POS)) %>% 
+  #mutate(X_POS = ifelse(STRAIN == "ALR" & TISSUE == "Brain", -4, X_POS)) %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, SIG_STATUS, X_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, SIG_STATUS, X_POS) %>%
+  #super cool move -- paste entries together from a group into one label
+  summarise(LABEL = str_c(START, collapse=",")) %>%
+  mutate(X_POS = ifelse(grepl(",", LABEL), -2.65, X_POS ))
+
+plotting_asteriks = point_background_comp %>%
+  filter(SIG_STATUS == "SIG") %>% 
+  left_join(plotting_dist_df, by = c("STRAIN", "TISSUE", "AGE_BIN", "START")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, p_adj, NORM_MUT_FREQ_AT_POS) %>%
+  mutate(P_VAL_LABEL = scientific(p_adj, digits = 2)) %>%
+  mutate(X_POS = ifelse(log10(NORM_MUT_FREQ_AT_POS) < -3.25, -3.5, -2.85)) %>%
+  mutate(X_POS = ifelse((STRAIN == "ALR" & TISSUE == "Brain" & AGE_BIN == "YOUNG"), -4, X_POS)) %>%
+  mutate(P_VAL_LABEL = ifelse((STRAIN == "ALR" & TISSUE == "Brain" & AGE_BIN == "OLD" & START == 9347), "", P_VAL_LABEL)) %>% 
+  mutate(X_POS = ifelse((STRAIN == "ALR" & TISSUE == "Brain" & AGE_BIN == "OLD" & START == 4738), -2.8, X_POS)) %>%
+  mutate(P_VAL_LABEL = ifelse((STRAIN == "ALR" & TISSUE == "Brain" & AGE_BIN == "OLD" & START == 4738), paste("**", P_VAL_LABEL, sep = ""), P_VAL_LABEL)) %>%
+  mutate(X_POS = ifelse((STRAIN == "ALR" & TISSUE == "Heart" & AGE_BIN == "OLD" & START == 4738), -2.8, X_POS)) %>%
+  mutate(P_VAL_LABEL = ifelse((STRAIN == "ALR" & TISSUE == "Heart" & AGE_BIN == "OLD" & START == 4738), paste("**", P_VAL_LABEL, sep = ""), P_VAL_LABEL)) %>%
+  mutate(P_VAL_LABEL = ifelse((STRAIN == "ALR" & TISSUE == "Heart" & AGE_BIN == "OLD" & START == 9347), "", P_VAL_LABEL))
+  
+
+```
+
+
+
+Plotting now! 
+
+
+```{r}
+
+dist = ggplot(plotting_dist_df) 
+
+dist = dist + 
+  geom_density_ridges(data = subset(plotting_dist_df, plotting_dist_df$GEOM_TYPE == "DIST"), aes(x = log10(NORM_MUT_FREQ_AT_POS), y = AGE_LABEL, fill = NEW_SITE_LABEL), alpha=0.5,color='black',scale=3,size=0.01) +
+  geom_point(data = subset(plotting_dist_df, plotting_dist_df$GEOM_TYPE == "POINT"), aes(x = log10(NORM_MUT_FREQ_AT_POS), y = AGE_LABEL, color = NEW_SITE_LABEL)) + 
+  geom_text(data = plotting_asteriks, aes(x = X_POS, y = ifelse(AGE_BIN == "OLD", 1.55, 2.55), label = P_VAL_LABEL), size = 2.75) + 
+  #geom_text(data = plotting_point_labels, aes(x = X_POS , y = ifelse(AGE_BIN == "OLD", 1.5, 2.5), label = LABEL, size = 3), size = 2) +
+  geom_text(data = p_values_nzb, aes(x = ifelse((TISSUE == "Brain" & AGE_BIN == "YOUNG"), -2.75 ,-3), y = ifelse(AGE_BIN == "OLD", 1.55, 2.55), label = P_ADJ_LABEL), size = 2.75, inherit.aes = FALSE) + 
+  scale_fill_manual(name = "Age", values = c("#018571", "gray60", "#80CDC1", "gray80")) + 
+  scale_color_manual(values = c("#018571", "#80CDC1"), guide = "none") + 
+  xlab("Mutation Frequency [log10]") + 
+  ylab("Age and Site Type") + 
+  theme_bw(base_size = 16) + 
+  facet_grid(STRAIN ~ TISSUE) +
+  theme(panel.grid=element_blank(),
+        text = element_text(family = "sans"),
+        panel.border = element_blank(),
+        strip.background = element_blank(),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        strip.text.x = element_text(size = 11),
+        strip.text.y  = element_text(size = 11),
+        axis.text.y=element_text(size = 10), 
+        axis.text.x =element_text(size = 10),
+        legend.position = "none") + 
+  coord_cartesian(xlim=c(-5.25,-2.5)) 
+
+print(dist)
+
+
+pdf(paste(outdir_figures,"/corr_NUMT_freqs_dist.pdf",sep=""),width=8,height=4)
+print(dist)
+dev.off()
+
+pdf(paste(outdir_figures,"/leg_corr_NUMT_freqs_dist.pdf",sep=""),width=12,height=4)
+print(dist + theme(legend.position = "bottom"))
+dev.off()
+
+```
+
+Plotting the mutation freq per position for young and old, where we also highlight the location of the NUMT region 
+
+```{r}
+
+young_muts = normalized_mut_freq %>% 
+  filter(AGE_BIN == "YOUNG") %>% 
+  filter(NORM_MUT_FREQ_AT_POS > 0)
+
+y_seg_pos = min(young_muts$NORM_MUT_FREQ_AT_POS)
+
+young_mut_freq = ggplot(young_muts) 
+
+young_mut_freq = young_mut_freq + 
+   geom_point(data = subset(young_muts, young_muts$SITE_TYPE == "NOT_HAPLO") , aes(x = START, y = NORM_MUT_FREQ_AT_POS, color = SITE_TYPE, size = NORM_MUT_FREQ_AT_POS), alpha = 0.75) +
+  #plotted this way so that haplo sites will be in front of other sites in the image
+  geom_point(data = subset(young_muts, young_muts$SITE_TYPE == "HAPLO_SITE") , aes(x = START, y = NORM_MUT_FREQ_AT_POS, color = SITE_TYPE, size = NORM_MUT_FREQ_AT_POS), alpha = 0.75) +
+  geom_segment(x = 6394, xend = 11042, y = log10(y_seg_pos) , yend = log10(y_seg_pos)) +
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = scales::trans_format("log10", math_format(10^.x))) +
+  xlab("Position in the mt-genome (bp)") + 
+  ylab("Mutation Frequency at Position") + 
+  scale_color_manual(name = "Site Type", labels = c("Haplotype Site", "Other"), values = c("#018571", "gray80")) + 
+  facet_grid(STRAIN ~ TISSUE) + 
+  theme_bw(base_size = 16) + 
+  theme(strip.background = element_blank(), 
+        text = element_text(family = "sans"),
+        axis.title.x = element_text(size = 12),
+         axis.title.y = element_text(size = 12),
+         strip.text.x = element_text(size = 11),
+        strip.text.y  = element_text(size = 11),
+         axis.text.y=element_text(size = 10), 
+        axis.text.x =element_text(size = 10),
+        legend.position = "none")
+
+png(paste(outdir_figures,"/corr_NUMT_freqs_young_mut_freq_w_haplotypes.png",sep=""),width=7,height=5,unit='in',res=800)
+print(young_mut_freq)
+dev.off()
+
+
+```
+
+```{r}
+
+old_muts = normalized_mut_freq %>% 
+  filter(AGE_BIN == "OLD") %>% 
+  filter(NORM_MUT_FREQ_AT_POS > 0)
+
+y_seg_pos = min(old_muts$NORM_MUT_FREQ_AT_POS)
+
+old_mut_freq = ggplot(old_muts) 
+
+old_mut_freq = old_mut_freq + 
+   geom_point(data = subset(old_muts, old_muts$SITE_TYPE == "NOT_HAPLO") , aes(x = START, y = NORM_MUT_FREQ_AT_POS, color = SITE_TYPE, size = NORM_MUT_FREQ_AT_POS), alpha = 0.75) +
+  geom_point(data = subset(old_muts, old_muts$SITE_TYPE == "HAPLO_SITE") , aes(x = START, y = NORM_MUT_FREQ_AT_POS, color = SITE_TYPE, size = NORM_MUT_FREQ_AT_POS), alpha = 0.75) +
+  geom_segment(x = 6394, xend = 11042, y = log10(y_seg_pos) , yend = log10(y_seg_pos)) +
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = scales::trans_format("log10", math_format(10^.x))) +
+  xlab("Position in the mt-genome (bp)") + 
+  ylab("Mutation Frequency at Position") + 
+  scale_color_manual(name = "Site Type", labels = c("Haplotype Site", "Other"), values = c("#018571", "gray80")) + 
+  facet_grid(STRAIN ~ TISSUE) + 
+  theme_bw(base_size = 16) + 
+  theme(strip.background = element_blank(), 
+        text = element_text(family = "sans"),
+        axis.title.x = element_text(size = 12),
+         axis.title.y = element_text(size = 12),
+         strip.text.x = element_text(size = 11),
+        strip.text.y  = element_text(size = 11),
+         axis.text.y=element_text(size = 10), 
+        axis.text.x =element_text(size = 10),
+        legend.position = "none")
+  
+png(paste(outdir_figures,"/corr_NUMT_freqs_old_mut_freq_w_haplotypes.png",sep=""),width=7,height=5,unit='in',res=800)
+print(old_mut_freq)
+dev.off()
+
+```

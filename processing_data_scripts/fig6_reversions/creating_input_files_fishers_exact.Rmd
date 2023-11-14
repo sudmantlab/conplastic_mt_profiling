@@ -1,0 +1,253 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(scales)
+```
+
+Loading the files we will be working with
+
+```{r}
+
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/reversions/")
+
+outdir_figures = "figures/"
+outdir_files = "files/"
+
+supertable_file = "../input_files/supertable.txt"
+supertable = read.table(supertable_file, header = TRUE, stringsAsFactors = FALSE)
+
+#this file contains REVERSION haplotype sites (ALT > B6 REF) wihtout any correction for NUMT contamination
+haplotype_reversions_file = "../input_files/haplotype_mutations.vcf" 
+haplotype_reversions = read.table(haplotype_reversions_file, header = TRUE, stringsAsFactors = FALSE)
+
+#this file contains the estimated chr1 NUMT contamination 
+NUMT_mapping_prop_file = "../checking_NUMT/files/cons_junction_cont_est.txt"
+NUMT_mapping_prop = read.table(NUMT_mapping_prop_file, header = TRUE, stringsAsFactors = FALSE)
+
+haplotypes_nonreversions_file = "../input_files/haplotype_sites_nonreversion_muts.txt"
+haplotypes_nonreversions = read.table(haplotypes_nonreversions_file, header = TRUE, stringsAsFactors = FALSE)
+```
+
+Let's start with our nonhaplotype sites 
+
+
+```{r}
+#all we can do here is calculate the allele count across a condition and recode the alt alleles
+nonhaplotype_alt_allele_counts = supertable %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, VARIANT_TYPE, REF, ALT, ALT_ALLELE_DEPTH) %>% 
+  #unique so that there aren't any duplicates at pos that overlap in multiple genes
+  unique() %>%
+  filter(VARIANT_TYPE != "DEL" | VARIANT_TYPE != "INS") %>%
+  mutate(MUTATION_TYPE = paste(REF, ALT, sep = ">")) 
+
+
+nonhaplotype_alt_allele_counts = nonhaplotype_alt_allele_counts %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH) %>% 
+  mutate(MUTATION_TYPE = recode(nonhaplotype_alt_allele_counts$MUTATION_TYPE, "A>T" = "T>A",
+                  "A>C" = "T>G",
+                  "A>G" = "T>C",
+                  "C>A" = "G>T",
+                  "C>G" = "G>C",
+                  "C>T" = "G>A",
+                  "A>A" = "T>T",
+                  "C>C" = "G>G")) %>%
+  #we should calculate the alt allele depth for each type of mutation in a condition 
+  select(STRAIN, TISSUE, AGE_BIN, START, MUTATION_TYPE, ALT_ALLELE_DEPTH) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, START, MUTATION_TYPE) %>% 
+  summarise(COND_ALLELE_COUNT = sum(ALT_ALLELE_DEPTH))
+
+
+```
+
+The next thing we have to do is calculate the aggregated read depth at a position and the ref allele depth for each position = read depth -  alt allele depth total
+
+```{r}
+
+nonhaplotype_read_depth_per_pos = supertable %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>% 
+  unique() %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>% 
+  group_by(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS) %>% 
+  summarise(SAMPLE_ALLELE_COUNT = sum(ALT_ALLELE_DEPTH)) %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, SAMPLE_ALLELE_COUNT, READ_DEPTH_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, START) %>% 
+  summarise(COND_ALLELE_COUNT = sum(SAMPLE_ALLELE_COUNT), COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>%
+  mutate(COND_REF_ALLELE_COUNT = COND_READ_DEPTH_AT_POS - COND_ALLELE_COUNT) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, COND_REF_ALLELE_COUNT)
+
+```
+
+Merging our information for the nonhaplotype sites
+
+
+```{r}
+
+nonhaplotype_merged_info = nonhaplotype_alt_allele_counts %>% 
+  left_join(nonhaplotype_read_depth_per_pos, by = c("STRAIN", "TISSUE", "AGE_BIN", "START")) 
+
+```
+
+Now split the mutation type into alleles
+
+```{r}
+nonhaplotype_merged_info = nonhaplotype_merged_info %>% 
+  separate(MUTATION_TYPE, c("RECODED_REF", "RECODED_ALT"))
+```
+
+We move to working with our haplotype sites nonreversion mutations, where we're particularly interested in the alt allele depth
+
+```{r}
+haplotype_nonreversion_info = haplotypes_nonreversions %>% 
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN)) %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, VARIANT_TYPE, REF_ALLELE_DEPTH, ALT_ALLELE_DEPTH) %>% 
+  filter(VARIANT_TYPE == "SNV") %>% 
+  mutate(MUTATION_TYPE = paste(REF, ALT, sep = ">"))
+
+haplotype_nonreversion_info = haplotype_nonreversion_info %>%
+  mutate(MUTATION_TYPE = recode(haplotype_nonreversion_info$MUTATION_TYPE, "A>T" = "T>A",
+                  "A>C" = "T>G",
+                  "A>G" = "T>C",
+                  "C>A" = "G>T",
+                  "C>G" = "G>C",
+                  "C>T" = "G>A",
+                  "A>A" = "T>T",
+                  "C>C" = "G>G")) %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, MUTATION_TYPE, ALT_ALLELE_DEPTH) %>% 
+  group_by(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, MUTATION_TYPE) %>% 
+  summarise(SAMPLE_ALLELE_COUNT = sum(ALT_ALLELE_DEPTH)) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, MUTATION_TYPE, SAMPLE_ALLELE_COUNT) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, START, MUTATION_TYPE) %>% 
+  summarise(COND_ALLELE_COUNT = sum(SAMPLE_ALLELE_COUNT)) %>%
+  separate(MUTATION_TYPE, c("RECODED_REF", "RECODED_ALT"))
+  
+```
+
+Finally our reversion data! 
+
+```{r}
+temp_haplotype_reversions = haplotype_reversions %>% 
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN)) %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, VARIANT_TYPE, REF_ALLELE_DEPTH, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>% 
+  filter(VARIANT_TYPE == "SNV") %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, REF_ALLELE_DEPTH, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>% 
+  group_by(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, READ_DEPTH_AT_POS) %>% 
+  summarise(SAMPLE_REF_ALLELE_COUNT = sum(REF_ALLELE_DEPTH), SAMPLE_ALT_ALLELE_COUNT = sum(ALT_ALLELE_DEPTH)) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, REF, ALT, SAMPLE_REF_ALLELE_COUNT, SAMPLE_ALT_ALLELE_COUNT, READ_DEPTH_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, START, REF, ALT) %>% 
+  summarise(COND_REF_ALLELE_COUNT = sum(SAMPLE_REF_ALLELE_COUNT), 
+            COND_ALT_ALLELE_COUNT = sum(SAMPLE_ALT_ALLELE_COUNT),
+            COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS))
+```
+
+We need to correct for NUMT contamination 
+
+```{r}
+#building our labeller 
+
+NUMT_labeler = function(position) {
+  #remember we are in 0-indexed coords
+  start = 6393
+  end = 11041
+  
+ if(position >= start & position <= end) {
+   label = "NUMT"}
+ else{label = "NOT_NUMT"}
+
+ return(label)
+}
+
+```
+
+Labeling our NUMT region 
+```{r}
+
+labeled_positions_haplotype_reversions = temp_haplotype_reversions %>% 
+  rowwise() %>% 
+  mutate(REGION = NUMT_labeler(START))
+
+```
+
+```{r}
+NUMT_mapping_prop = NUMT_mapping_prop %>% 
+  mutate(REGION = "NUMT") %>% 
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN)) 
+
+NUMT_contamination = NUMT_mapping_prop %>%
+  filter(CHRM == "chr1") %>% 
+  #let's choose our contamination perc == max(JUNCTION_BEFORE, JUNCTION_AFTER)
+  select(STRAIN, TISSUE, AGE_BIN, REGION, JUNCTION_BEFORE, JUNCTION_AFTER) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, REGION) %>% 
+  mutate(CONT_PERC = max(JUNCTION_BEFORE, JUNCTION_AFTER))
+```
+
+
+Merging our mut_freq info with our contamination info 
+
+
+```{r}
+
+haplotype_reversions_merged_df = labeled_positions_haplotype_reversions %>%
+  left_join(NUMT_contamination, by = c("STRAIN", "TISSUE", "AGE_BIN", "REGION")) %>% 
+  mutate(CONT_PERC = ifelse(is.na(CONT_PERC), 0, CONT_PERC)) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, REF, ALT, COND_REF_ALLELE_COUNT, COND_ALT_ALLELE_COUNT, COND_READ_DEPTH_AT_POS, CONT_PERC) %>% 
+  mutate(EST_READS_FROM_CHR1 = COND_READ_DEPTH_AT_POS * CONT_PERC) %>% 
+  mutate(CORR_READ_DEPTH = COND_READ_DEPTH_AT_POS - EST_READS_FROM_CHR1,
+         CORR_COND_REF_ALLELE_COUNT = COND_REF_ALLELE_COUNT - EST_READS_FROM_CHR1) %>%
+  mutate(FLOORED_CORR_REV_ALLELE_DEPTH = ifelse(CORR_COND_REF_ALLELE_COUNT < 0, 0, CORR_COND_REF_ALLELE_COUNT))
+
+```
+
+Tidying up the reversion file and putting it into the format that we want for the analysis 
+
+1. Renaming the columns for our corrected depths to match with our relabeled alleles (look at 3)
+2. Recode the mutations since the other files are recoded as well
+3. Label the alleles accordingly so that our brain doesn't have to flip about what reversion means
+  Ref = B6_allele_reversion
+  Alt = Org_conplastic_allele
+  
+```{r}
+
+output_haplotype_reversions = haplotype_reversions_merged_df %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, REF, ALT, FLOORED_CORR_REV_ALLELE_DEPTH, COND_ALT_ALLELE_COUNT)
+
+output_haplotype_reversions = output_haplotype_reversions %>% 
+  mutate(REV_B6_ALLELE = REF, ORG_CONPLASTIC_ALLELE = ALT) %>%
+  mutate(REVERSION_ALLELE_DEPTH = round(FLOORED_CORR_REV_ALLELE_DEPTH), ORG_CONPLASTIC_ALLELE_DEPTH = COND_ALT_ALLELE_COUNT) %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, REV_B6_ALLELE, ORG_CONPLASTIC_ALLELE, REVERSION_ALLELE_DEPTH, ORG_CONPLASTIC_ALLELE_DEPTH)
+  
+  
+```
+
+
+Writing out the files that we will be using in the analysis 
+
+```{r}
+
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/reversions/")
+
+write.table(nonhaplotype_merged_info, file = paste(outdir_files,"nonhaplotype_site_allele_counts.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+
+write.table(haplotype_nonreversion_info, file = paste(outdir_files,"haplotype_site_nonreversion_allele_counts.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+
+write.table(output_haplotype_reversions, file = paste(outdir_files,"haplotype_site_reversion_allele_counts_w_NUMT_correction.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+
+```
+
+
+
+
+
+
+
+
+

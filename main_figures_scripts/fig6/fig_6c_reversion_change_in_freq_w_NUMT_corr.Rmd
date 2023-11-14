@@ -129,6 +129,7 @@ haplo_sites_delta = delta_df %>%
 ```{r}
 
 total_sites_per_change_type = delta_df %>%
+  ungroup() %>%
   filter(SITE_TYPE == "NOT_HAPLO") %>%
   select(STRAIN, TISSUE, CHANGE_TYPE) %>%
   group_by(STRAIN, TISSUE, CHANGE_TYPE) %>%
@@ -190,8 +191,10 @@ haplo_sites_p_vals = haplo_sites_delta %>%
 ```{r}
 
 adjusted_haplo_sites_p_vals = haplo_sites_p_vals %>%
+  ungroup() %>%
+  group_by(STRAIN) %>%
   mutate(p_adj = p.adjust(P_VAL, method = "BH")) %>% 
-  mutate(SIG_STATUS = ifelse(p_adj < 0.01, "SIG", "N.S."))
+  mutate(SIG_STATUS = ifelse(p_adj < 0.02, "SIG", "N.S."))
   
 ```
 

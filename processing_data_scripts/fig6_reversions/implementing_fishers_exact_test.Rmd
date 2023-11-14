@@ -1,0 +1,134 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(scales)
+```
+
+Bringing in our data
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/reversions/")
+
+outdir_figures = "figures/"
+outdir_files = "files/"
+
+contingency_table_entries_file = "files/contingency_tables_entries.txt"
+contingency_table_entries = read.table(contingency_table_entries_file, header = TRUE, stringsAsFactors = FALSE)
+
+```
+
+
+```{r}
+#this loop will run through our contingency table -- where each row has information for the contingency table 
+#1) builds the tble
+#2) runs the fisher's exact test on the tbl 
+#3) adds result to df 
+# recall: matrices need to have the same type of info and we have mixed info we're saving here
+#also extracting the pval does weird things to the column name so we don't use rbind given that it assumes the same column name 
+
+iterations = nrow(contingency_table_entries)
+
+#initializing our df 
+output = data.frame(STRAIN = character(),
+                    TISSUE = character(), 
+                    AGE_BIN = character(),
+                    POS = numeric(),
+                    ORG_CONPLASTIC_ALLELE = character(),
+                    REV_B6_ALLELE = character(), 
+                    PVAL = numeric(),
+                    OR = numeric()) 
+  
+for(i in 1:iterations){
+  #creating contingency table 
+  row_of_info = contingency_table_entries[i,]
+
+  #capturing info that we want to keep in our df 
+  strain = row_of_info[1] 
+  tissue = row_of_info[2]
+  age = row_of_info[3]
+  pos = row_of_info[4]
+  org_conplastic_allele = row_of_info[5]
+  rev_b6_allele = row_of_info[6]
+  
+  #constructed our 2x2 df 
+  tbl = matrix(as.numeric(row_of_info[7:10]), ncol=2, byrow=F)
+
+  #running fisher's exact on the df 
+  fishers_results = fisher.test(tbl, alternative = "two.sided")
+
+  pval = fishers_results$p.value[1]
+  OR = fishers_results$estimate
+
+  #appending to our df 
+  results = c(strain, tissue, age, pos, org_conplastic_allele, rev_b6_allele, pval, OR)
+  
+  output[nrow(output) + 1,] = results
+}
+
+```
+
+```{r}
+
+rm(strain, tissue, age, pos, org_conplastic_allele, rev_b6_allele, pval, OR, results, fishers_results, row_of_info, tbl)
+
+```
+
+Multiple hypothesis test correcting 
+
+```{r}
+
+output_bh_corr = output %>% 
+  mutate(ADJ_PVAL=p.adjust(PVAL, method="BH")) %>%
+  mutate(SIG_STATUS = ifelse(ADJ_PVAL < 0.01, "SIG", "N.S.")) %>%
+  arrange(desc(SIG_STATUS))
+
+```
+
+ALR is sig for 4738 and 9347 in all tissues for old and sig for 4738 in all tissues for young
+```{r}
+
+output_bh_corr %>%
+  filter(STRAIN == "ALR") %>%
+  filter(SIG_STATUS == "SIG")
+
+```
+sig for 7777 for all tissues in old and for brain and heart in young 
+```{r}
+
+output_bh_corr %>%
+  filter(STRAIN == "FVB") %>%
+  filter(SIG_STATUS == "SIG")
+
+```
+sig for heart in old at 9460 
+```{r}
+
+output_bh_corr %>%
+  filter(STRAIN == "AKR") %>%
+  filter(SIG_STATUS == "SIG")
+
+```
+
+sig for 50 cases in old and 232 in young 
+```{r}
+
+output_bh_corr %>%
+  filter(STRAIN == "NZB") %>%
+  filter(SIG_STATUS == "SIG") 
+```
+Recording the table for our records 
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/reversions/")
+
+write.table(output_bh_corr, file = paste(outdir_files,"fishers_exact_results_reversions.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+
+
+```
