@@ -1,0 +1,23 @@
+rule all:
+	input:
+		"output/annotated_all_possible_variants.txt"
+
+rule all_possible_mutations:
+	input:
+		fa = "input/chrM_wo_dloop.fa",
+		haplo = "input/haplotype_mutations.vcf"
+	output:
+		"output/all_possible_variants_df.txt"
+	script:
+		"scripts/creating_all_possible_mutations_df.py -fasta_file_path {input.fa} -haplotype_file_path {input.haplo} -output_file {output}"
+        
+rule annotate_variants:
+	input:
+		vcf = "output/all_possible_variants_df.txt",
+		fa = "input/chrM_wo_dloop.fa",
+		haplo = "input/haplotype_mutations.vcf",
+		coords = "input/Mouse_Mt_Genome_Coordinates"
+	output:
+		"output/annotated_all_possible_variants.txt"
+	script:
+		"scripts/annotate_variants.py -vcf_file_path {input.vcf} -fasta_file_path {input.fa} -haplotype_file_path {input.haplo} -mt_coords_file_path {input.coords} -output_file {output}"

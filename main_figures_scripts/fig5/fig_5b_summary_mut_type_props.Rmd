@@ -1,0 +1,120 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+Importing all mut prop files (across the three ways we ran this analysis):
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/files/"
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/figures/"
+
+props_wo_dloop_file = "../hnhs_wo_dloop/files/mut_type_props_nondloop.txt"
+props_wo_dloop = read.table(props_wo_dloop_file, sep = "\t", header = TRUE)
+
+props_w_dloop_file = "../files/mut_prop_wo_hfps.txt"
+props_w_dloop = read.table(props_w_dloop_file, sep = "\t", header = TRUE)
+
+per_bin_file = "files/mut_type_props_all_bins_wo_dloop.txt"
+per_bin = read.table(per_bin_file, sep = "\t", header = TRUE)
+
+
+```
+
+```{r}
+props_wo_dloop_merging = props_wo_dloop %>%
+  ungroup() %>%
+  select(MUTATION_TYPE, HET_PROP) %>%
+  mutate(BIN = "AGG_WO_DLOOP") %>%
+  group_by(MUTATION_TYPE, BIN) %>%
+  summarise(AVG = mean(HET_PROP), COUNT = n(), SE = sd(HET_PROP)/sqrt(COUNT))
+  
+```
+
+```{r}
+props_w_dloop_merging = props_w_dloop %>%
+  ungroup() %>%
+  select(MUTATION_TYPE, HET_PROP) %>%
+  mutate(BIN = "AGG_W_DLOOP") %>%
+  group_by(MUTATION_TYPE, BIN) %>%
+  summarise(AVG = mean(HET_PROP), COUNT = n(), SE = sd(HET_PROP)/sqrt(COUNT))
+  
+```
+
+```{r}
+rm(props_w_dloop, props_wo_dloop)
+
+```
+
+```{r}
+per_bin_merge = per_bin %>%
+  ungroup() %>%
+  select(MUT_TYPE, BIN, PROP) %>%
+  group_by(MUT_TYPE, BIN) %>%
+  summarise(AVG = mean(PROP), COUNT = n(), SE = sd(PROP)/sqrt(COUNT)) %>%
+  rename(MUTATION_TYPE = MUT_TYPE) %>%
+  arrange(desc(BIN))
+
+```
+
+```{r}
+
+plotting_mut_freqs = rbind(props_w_dloop_merging, props_wo_dloop_merging, per_bin_merge) 
+
+plotting_mut_freqs$MUTATION_TYPE = factor(plotting_mut_freqs$MUTATION_TYPE, levels =  c("G>A" ,"C>T", "G>T" , "C>A", "T>C", "A>G", "G>C", "C>G", "T>A" , "A>T","T>G", "A>C"))
+plotting_mut_freqs$BIN = factor(plotting_mut_freqs$BIN, levels =  c("AGG_W_DLOOP", "AGG_WO_DLOOP", "upper-5e-5", "upper-1e-4", "upper-1e-3", "upper-1e-2", "upper-1"))
+
+```
+
+```{r}
+library(PNWColors)
+
+moth_pal = pnw_palette("Moth", 12, type = "continuous")
+bay_pal = pnw_palette("Bay", 8, type = "continuous")
+
+
+plotting_mut_freqs = plotting_mut_freqs %>% 
+                      mutate(pos = match(BIN,unique(plotting_mut_freqs$BIN)))
+```
+
+```{r}
+
+summary_mut_freq_dist = ggplot(plotting_mut_freqs, aes(x = pos, y = AVG, color = BIN),position = position_dodge(width  = 0.2)) +
+  geom_errorbar(aes(ymin=AVG-SE, ymax=AVG+SE), width = 0.01) +
+  geom_point(size = 0.55) + 
+  theme_bw() + 
+  xlab("Mutation Type") + 
+  ylab("Proportion") + 
+  scale_color_manual(name = "Frequency Bins", values = c("AGG_W_DLOOP" = bay_pal[1],"AGG_WO_DLOOP"= bay_pal[3] ,"upper-1" = moth_pal[10], "upper-1e-2" = moth_pal[9], "upper-1e-3" = moth_pal[7], "upper-1e-4" = moth_pal[4], "upper-5e-5" = moth_pal[2]), labels = c("AGG_W_DLOOP" = "+ D-Loop", "AGG_WO_DLOOP" = "- D-Loop","upper-5e-5" = "(0, 5e-5]", "upper-1e-4" = "(5e-5, 1e-4]", "upper-1e-3" = "(1e-4, 1e-3]", "upper-1e-2" = "(1e-3, 1e-2]", "upper-1" = "(1e-2, 1]")) + 
+  theme(strip.text = element_text(angle = 45, size = 8),
+        strip.background = element_blank(),
+        legend.position = "none",
+        panel.grid=element_blank(),
+        panel.spacing=unit(0.1,"lines"),
+        axis.ticks.x =element_blank(),
+        axis.text.x = element_blank())+
+  facet_wrap(~MUTATION_TYPE,nrow = 1, strip.position = "bottom")
+
+pdf(paste(outdir_figures,"/summary_mut_type_props_dist.pdf", sep=""),width=4.5,height=2)
+print(summary_mut_freq_dist)
+dev.off()
+
+pdf(paste(outdir_figures,"/leg_summary_mut_type_props_dist.pdf", sep=""),width=6,height=3)
+print(summary_mut_freq_dist + theme(legend.position = "bottom"))
+dev.off()
+
+
+```
+
+
+
+
+
+

@@ -1,0 +1,610 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/figures/"
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/"
+
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+somatic_muts_file = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/somatic_mutations.vcf"
+
+#this file contains the duplex bp of each base 
+duplex_bp_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/mut_freq_per_type.csv"
+duplex_bp = read.table(duplex_bp_file, header=TRUE, stringsAsFactors = FALSE)
+
+#all mutations that are not our genotypes for each strain 
+somatic_muts = read.table(somatic_muts_file, header = TRUE, stringsAsFactors = FALSE)
+
+```
+Checking the C to G duplex seq ratio: ~1.96-2x more Cs than Gs which matches with the ratio you'd see for one mt-genome (~1.97 more Cs to Gs) 
+
+```{r}
+duplex_bp %>%
+  filter(MUTATION_CLASS == "SNV") %>%
+  filter(MUTATION_TYPE != "Total") %>%
+  select(SAMPLE, MUTATION_TYPE, DENOMINATOR) %>%
+  separate(MUTATION_TYPE, sep = ">", into = c("REF", "ALT")) %>%
+  select(SAMPLE, REF, DENOMINATOR) %>%
+  unique() %>%
+  filter(REF == "C" | REF == "G") %>%
+  pivot_wider(names_from = REF, values_from = DENOMINATOR) %>%
+  mutate(RATIO = C/G)
+```
+
+Calculating the duplex depth bp 
+
+```{r}
+
+duplex_ref_depth = duplex_bp %>%
+  #filter our samples we do not use in our analysis
+  filter(SAMPLE != "B6_Y3_Heart") %>%
+  filter(SAMPLE != "B6_Y5_Liver", SAMPLE != "B6_Y6_Liver", SAMPLE != "B6_Y7_Liver", SAMPLE != "B6_Y8_Liver") %>%
+  filter(AGE_BIN != "MID") %>%
+  #we only want the entries that have a SNV because they have the ref base duplex depth
+  filter(MUTATION_CLASS == "SNV") %>%
+  filter(MUTATION_TYPE != "Total") %>%
+  select(SAMPLE, MUTATION_TYPE, DENOMINATOR) %>%
+  separate(MUTATION_TYPE, sep = ">", into = c("REF", "ALT")) %>%
+  select(SAMPLE, REF, DENOMINATOR) %>%
+  unique() %>%
+  filter(REF == "C" | REF == "G" | REF == "A" | REF == "T")
+
+
+```
+
+```{r}
+rm(duplex_bp)
+```
+
+
+Calculating the de novo mutation type counts relative to the L-strand
+
+```{r}
+
+serrano_de_novo_snvs = somatic_muts %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  #filter out samples that we do not use in our analysis
+  filter(SAMPLE != "B6_Y3_Heart") %>%
+  filter(SAMPLE != "B6_Y5_Liver", SAMPLE != "B6_Y6_Liver", SAMPLE != "B6_Y7_Liver", SAMPLE != "B6_Y8_Liver") %>% 
+  filter(AGE_BIN != "MID") %>%
+  #filter variants with a depth < 100
+  #we remove ~200 mutations 
+  filter(ALT_ALLELE_DEPTH < 100) %>%
+  #calculate the mutation frequency at each position for each sample
+  mutate(MUT_FREQ = ALT_ALLELE_DEPTH/READ_DEPTH_AT_POS) %>%
+  #filter out any mutation with a frequency > 1% 
+  filter(MUT_FREQ < 0.01) %>%
+  #scoring each mutation once
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT) %>%
+  unique() %>%
+  #filtering for SNVs
+  filter(nchar(REF) == 1) %>%
+  filter(nchar(ALT) == 1) %>%
+  mutate(MUT_TYPE = paste(REF, ALT, sep = ">")) %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, MUT_TYPE) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, SAMPLE, MUT_TYPE) %>%
+  summarise(MUT_COUNT = n())
+
+```
+
+
+```{r}
+
+serrano_mut_freqs = serrano_de_novo_snvs %>%
+  #splitting the mutation type so that we can merge on sample and ref with duplex depth
+  separate(MUT_TYPE, sep = ">", into = c("REF", "ALT"), remove = FALSE) %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, MUT_TYPE, REF, MUT_COUNT) %>%
+  left_join(duplex_ref_depth, by = c("SAMPLE", "REF")) %>%
+  mutate(MUT_FREQ = MUT_COUNT/DENOMINATOR)
+
+```
+
+We need to create a dummy df to make sure that we account for the cases where the mutation frequency was 0 -- this will impact the average across samples 
+
+```{r}
+
+sample_names = rep(((serrano_de_novo_snvs %>%
+  ungroup() %>%
+  select(SAMPLE) %>%
+    #note the each here repeats each entry 12 times before doing so for the next entry
+  unique())$SAMPLE), each = 12)
+
+mut_types = rep(((serrano_de_novo_snvs %>%
+  ungroup() %>%
+  select(MUT_TYPE) %>%
+  unique())$MUT_TYPE), 115)
+
+dummy_df = cbind(data.frame(sample_names), data.frame(mut_types)) 
+
+colnames(dummy_df) = c("SAMPLE", "MUT_TYPE")
+
+```
+
+```{r}
+serrano_mut_freqs_filled = serrano_mut_freqs %>%
+  ungroup() %>%
+  full_join(dummy_df, by = c("SAMPLE", "MUT_TYPE")) %>%
+  mutate(MUT_FREQ = ifelse(is.na(MUT_FREQ), 0, MUT_FREQ)) %>%
+  #we lost strain, tissue, and age info for the samples that do not have a mut freq
+  select(SAMPLE, MUT_TYPE, MUT_FREQ) %>%
+  #separating the sample info to recreate the strain, age_bin, and tissue fields
+  separate(SAMPLE, sep = "_", into = c("STRAIN", "AGE_MARKER", "TISSUE"), remove = FALSE) %>%
+  #rewriting the age bin field 
+  mutate(AGE_BIN = ifelse(grepl("O", AGE_MARKER), "OLD", "YOUNG")) %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, MUT_TYPE, MUT_FREQ)
+  
+```
+
+
+```{r}
+summary_serrano = serrano_mut_freqs_filled %>%
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, MUT_TYPE, MUT_FREQ) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, MUT_TYPE) %>%
+  summarise(AVG = mean(MUT_FREQ), SAMP_COUNT = n(), SE = sd(MUT_FREQ)/sqrt(SAMP_COUNT)) %>%
+  mutate(X_POS = recode(MUT_TYPE, "G>A" = 1, "C>T" = 2, "G>C" = 3, "C>G" = 4, "G>T" = 5, "C>A" = 6, "T>A" = 7, "A>T" = 8,
+                        "T>C" = 9, "A>G" = 10, "T>G" = 11, "A>C"= 12))
+
+summary_serrano$MUT_TYPE = factor(summary_serrano$MUT_TYPE, level = c("G>A","C>T", "G>C", "C>G", "G>T", "C>A", "T>A", "A>T", "T>C", "A>G", "T>G", "A>C"))
+summary_serrano$STRAIN = factor(summary_serrano$STRAIN, level = c("B6", "AKR", "ALR", "F", "NZB"))
+summary_serrano$AGE_BIN = factor(summary_serrano$AGE_BIN, level = c("YOUNG", "OLD"))
+```
+
+Exporting file of de novo mut freqs 
+
+```{r}
+outdir_files ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/"  
+
+#exporting our strand bias fishers exact test 
+write.table(serrano_mut_freqs_filled, file = paste(outdir_files,"/serrano_de_novo_mut_freqs.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+#exporting our strand bias fishers exact test 
+write.table(summary_serrano, file = paste(outdir_files,"/serrano_summary_de_novo_mut_freqs.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+We are running the strand bias analysis with a Fisher's Exact test, since our power comes from the mutation counts in this statistical test and we test for dependence between mut type and strand
+
+```{r}
+serrano_cond_snvs = serrano_de_novo_snvs %>%
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUT_TYPE, MUT_COUNT) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, MUT_TYPE) %>%
+  summarise(COND_MUT_COUNT = sum(MUT_COUNT)) %>%
+  ungroup() %>%
+  #creating a row to account for the one missing mutation type in a condition 
+  add_row(STRAIN = "F", TISSUE = "Brain", AGE_BIN = "YOUNG", MUT_TYPE = "T>G", COND_MUT_COUNT = 0) %>%
+  mutate(COND_LABEL = paste(STRAIN, TISSUE, AGE_BIN, sep = "_"))
+```
+
+We need the duplex depth for the Fisher's Exact 
+
+```{r}
+cond_duplex_ref_depth = duplex_ref_depth %>%
+  separate(SAMPLE, sep = "_", into = c("STRAIN", "AGE_MARKER", "TISSUE")) %>%
+  mutate(AGE_BIN = ifelse(grepl("O", AGE_MARKER), "OLD", "YOUNG")) %>%
+  mutate(COND_LABEL = paste(STRAIN, TISSUE, AGE_BIN, sep = "_")) %>%
+  select(COND_LABEL, REF, DENOMINATOR) %>%
+  group_by(COND_LABEL, REF) %>%
+  summarise(DP_SUM = sum(DENOMINATOR))
+```
+
+Exporting the above two files for an analysis of mutation types: 
+
+```{r}
+outdir_files ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/"  
+
+#exporting our strand bias fishers exact test 
+write.table(serrano_cond_snvs, file = paste(outdir_files,"/serrano_cond_mut_counts.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+write.table(cond_duplex_ref_depth, file = paste(outdir_files,"/serrano_cond_ref_bases.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+```
+
+The list of mutation pairs and cond_labels we will iterate through
+```{r}
+MUT_PAIRS = c("G>A_C>T","G>C_C>G", "G>T_C>A",
+              "T>G_A>C", "T>C_A>G", "T>A_A>T")
+
+
+COND_LABEL = (cond_duplex_ref_depth %>%
+  select(COND_LABEL) %>%
+  unique())$COND_LABEL
+
+```
+
+Now creating a for loop for our fishers exact test
+
+```{r}
+#initializing our df 
+fe_output = data.frame(COND_LABEL = character(),
+                    MUT_PAIR = character(),
+                    P_VAL = numeric(),
+                    OR = numeric()) 
+
+#looping through our mutation pairs 
+for(pair in MUT_PAIRS){
+    #break down the pair label based on the delim 
+    #assign the mutation and compliment to the variables 
+    #print variables 
+    print(pair) 
+    split = str_split(pair, "_")
+
+    #sigh totally breaking an abstraction here
+    mut = split[[1]][1]
+    comp_mut = split[[1]][2]
+  
+    #split the ref based on the mut 
+    mut_ref = str_split(mut, ">")[[1]][1]
+    comp_ref = str_split(comp_mut, ">")[[1]][1]
+    
+    #filter data based on mut and comp mut
+    mut_pair_subset_df = serrano_cond_snvs %>%
+      filter(MUT_TYPE == mut | MUT_TYPE == comp_mut)
+    
+    #now loop through each cond_label 
+    for(label in COND_LABEL){
+      #filter the duplex_bp data based on the cond_label 
+      duplex_bp_subset = cond_duplex_ref_depth %>%
+        filter(COND_LABEL == label)
+      
+    #subset df for this label 
+      
+      contigency_df_inputs = mut_pair_subset_df %>%
+        filter(COND_LABEL == label)
+      
+      #grab items for this condition fe contigency table 
+      mut_counts = contigency_df_inputs[contigency_df_inputs$MUT_TYPE == mut,]$COND_MUT_COUNT
+      comp_mut_counts = contigency_df_inputs[contigency_df_inputs$MUT_TYPE == comp_mut,]$COND_MUT_COUNT
+      
+      mut_ref_counts = duplex_bp_subset[duplex_bp_subset$REF == mut_ref,]$DP_SUM
+      comp_ref_counts = duplex_bp_subset[duplex_bp_subset$REF == comp_ref,]$DP_SUM
+      
+      #create contigency table
+      con_tbl = matrix(c(mut_counts, mut_ref_counts - mut_counts, comp_mut_counts, comp_ref_counts - comp_mut_counts), ncol = 2, byrow = F)
+      
+      #running fisher's exact on the df 
+      fishers_results = fisher.test(con_tbl, alternative = "two.sided")
+
+      pval = fishers_results$p.value[1]
+      OR = fishers_results$estimate
+
+      #appending to our df 
+      results = c(label, pair, pval, OR)
+  
+      fe_output[nrow(fe_output) + 1,] = results
+    
+}}
+
+```
+
+```{r}
+
+corrected_fe_output = fe_output %>%
+  mutate(P_ADJ = p.adjust(P_VAL, method="BH"))
+  
+
+```
+
+```{r}
+corrected_fe_output %>%
+  filter(P_ADJ < 0.01) %>%
+  arrange(P_ADJ)
+
+```
+
+Exporting our files
+
+```{r}
+
+outdir_files ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/"  
+
+#exporting our strand bias fishers exact test 
+write.table(corrected_fe_output, file = paste(outdir_files,"/serrano_fe_test_results.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+Plotting sig df 
+
+```{r}
+
+count_mut_type_sig = corrected_fe_output %>%
+  separate(COND_LABEL, into = c("STRAIN", "TISSUE", "AGE_BIN"), sep = "_") %>%
+  separate(MUT_PAIR, into = c("MUT_TYPE", "MUT_DROP"), sep = "_") %>%
+  mutate(SIG = ifelse(P_ADJ < 0.01, "**", "")) %>%
+  select(TISSUE, AGE_BIN, MUT_TYPE, SIG) %>%
+  filter(SIG == "**") %>%
+  group_by(TISSUE, AGE_BIN, MUT_TYPE, SIG) %>%
+  summarise(COUNT = n()) %>%
+  arrange(COUNT)
+
+```
+
+```{r}
+y_pos = corrected_fe_output %>%
+  separate(COND_LABEL, into = c("STRAIN", "TISSUE", "AGE_BIN"), sep = "_") %>%
+  separate(MUT_PAIR, into = c("MUT_TYPE", "MUT_DROP"), sep = "_") %>%
+  left_join(summary_serrano, by = c("STRAIN", "TISSUE", "AGE_BIN", "MUT_TYPE")) %>%
+  select(TISSUE, AGE_BIN, MUT_TYPE, AVG) %>%
+  group_by(TISSUE, AGE_BIN, MUT_TYPE) %>%
+  summarise(MAX_POS = max(AVG))
+
+```
+
+
+```{r}
+
+fe_pval_labels = count_mut_type_sig %>%
+  left_join(y_pos, by = c("TISSUE", "AGE_BIN", "MUT_TYPE")) %>% 
+  mutate(X_POS = recode(MUT_TYPE, "G>A" = 1, "C>T" = 2, "G>C" = 3, "C>G" = 4, "G>T" = 5, "C>A" = 6, "T>A" = 7, "A>T" = 8,"T>C" = 9, "A>G" = 10, "T>G" = 11, "A>C"= 12)) %>%
+  mutate(X_POS = X_POS + .5) %>%
+  mutate(STARS_Y_POS = MAX_POS + 5e-6) %>%
+  mutate(COUNT_Y_POS = MAX_POS + 4e-6) %>%
+  mutate(LABEL = paste("(", COUNT, ")", sep = ""))
+
+fe_pval_labels$AGE_BIN = factor(fe_pval_labels$AGE_BIN, levels = c("YOUNG", "OLD"))
+
+```
+
+Plotting the mutation frequencies 
+
+```{r}
+x_axis_labels = c("G>A", "C>T", "G>C", "C>G", "G>T", "C>A", "T>A", "A>T", "T>C", "A>G", "T>G", "A>C")
+
+age.labels = c("Young", "Old")
+names(age.labels) = c("YOUNG", "OLD")
+
+summary_serrano_plot = ggplot(summary_serrano, aes(x = X_POS, y = AVG, fill = STRAIN)) 
+
+summary_serrano_plot = summary_serrano_plot + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_errorbar(aes(ymin=AVG-SE, ymax=AVG+SE), width=.2,
+                 position=position_dodge(.9)) +
+  facet_grid(TISSUE ~ AGE_BIN, scales = "free_y", labeller = labeller(AGE_BIN = age.labels)) + 
+  ylab("Mutation frequency") + 
+  xlab("Mutation Type") + 
+  geom_text(data = fe_pval_labels, aes(x = X_POS, y = COUNT_Y_POS, label = LABEL), color = "black", size = 2.5, inherit.aes = FALSE) +
+  geom_text(data = fe_pval_labels, aes(x = X_POS, y = STARS_Y_POS, label = SIG), color = "black", size = 2.5, inherit.aes = FALSE) +
+  theme_bw() + 
+  scale_fill_manual(values = c("B6"= "#1d457f","AKR" = "#cc5c76", "ALR" = "#2f9e23", "F" = "#f57946", "NZB" = "#f7c22d")) +
+  scale_x_continuous(breaks = 1:12, labels = x_axis_labels) + 
+  theme(axis.text.x = element_text(angle = 90),
+        strip.background = element_blank(),
+        legend.position = "bottom")
+
+pdf(paste(outdir_figures,"/serrano_frequencies_strand_bias.pdf",sep=""),width=6,height=4 )
+print(summary_serrano_plot)
+dev.off()
+  
+```
+
+Splitting the plot into 2 to showcase all mutation frequencies clearly
+
+```{r}
+larger_freqs_df = summary_serrano %>%
+  filter(MUT_TYPE == "G>A" | MUT_TYPE == "C>T" | MUT_TYPE == "G>T" | MUT_TYPE == "C>A")
+```
+
+```{r}
+smaller_freqs_df = summary_serrano %>%
+  filter(!(MUT_TYPE == "G>A" | MUT_TYPE == "C>T" | MUT_TYPE == "G>T" | MUT_TYPE == "C>A"))
+```
+
+Plotting the larger mutation frequencies 
+
+```{r}
+larger_mut_freqs_plot = ggplot(larger_freqs_df, aes(x = MUT_TYPE, y = AVG, fill = STRAIN)) 
+
+larger_mut_freqs_plot = larger_mut_freqs_plot + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_errorbar(aes(ymin=AVG-SE, ymax=AVG+SE), width=.2,
+                 position=position_dodge(.9)) +
+  facet_grid(TISSUE ~ AGE_BIN, scales = "free_y", labeller = labeller(AGE_BIN = age.labels)) + 
+  ylab("Mutation frequency") + 
+  xlab("Mutation Type") + 
+  theme_bw() + 
+  scale_fill_manual(values = c("B6"= "#1d457f","AKR" = "#cc5c76", "ALR" = "#2f9e23", "F" = "#f57946", "NZB" = "#f7c22d")) +
+  theme(axis.text.x = element_text(angle = 90),
+        strip.background = element_blank(),
+        legend.position = "bottom")
+
+pdf(paste(outdir_figures,"/serrano_larger_mut_freqs.pdf",sep=""),width=3,height=4)
+print(larger_mut_freqs_plot)
+dev.off()
+
+```
+Plotting the smaller mutation frequencies 
+
+```{r}
+smaller_mut_freqs_plot = ggplot(smaller_freqs_df, aes(x = MUT_TYPE, y = AVG, fill = STRAIN)) 
+
+smaller_mut_freqs_plot = smaller_mut_freqs_plot + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_errorbar(aes(ymin=AVG-SE, ymax=AVG+SE), width=.2,
+                 position=position_dodge(.9)) +
+  facet_grid(TISSUE ~ AGE_BIN, scales = "free_y", labeller = labeller(AGE_BIN = age.labels)) + 
+  ylab("Mutation frequency") + 
+  xlab("Mutation Type") + 
+  theme_bw() + 
+  scale_fill_manual(values = c("B6"= "#1d457f","AKR" = "#cc5c76", "ALR" = "#2f9e23", "F" = "#f57946", "NZB" = "#f7c22d")) +
+  theme(axis.text.x = element_text(angle = 90),
+        strip.background = element_blank(),
+        legend.position = "bottom")
+
+pdf(paste(outdir_figures,"/serrano_smaller_mut_freqs.pdf",sep=""),width=5,height=4)
+print(smaller_mut_freqs_plot)
+dev.off()
+
+```
+
+Lastly, comparing the strand asymmetry across haplotypes for G>A/C>T 
+
+```{r}
+strand_asym_haplotypes = serrano_mut_freqs_filled %>%
+  filter(MUT_TYPE == "G>A" | MUT_TYPE == "C>T") %>%
+  mutate(COL_NAMES = recode(MUT_TYPE, "G>A" = "G_A", "C>T" = "C_T")) %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, COL_NAMES, MUT_FREQ) %>%
+  pivot_wider(names_from = COL_NAMES, values_from = MUT_FREQ) %>%
+  mutate(RATIO = G_A/C_T) %>%
+  select(STRAIN, TISSUE, AGE_BIN, RATIO) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>%
+  summarise(AVG = mean(RATIO), COUNT = n(), SE = sd(RATIO)/sqrt(COUNT))
+
+strand_asym_haplotypes$AGE_BIN = factor(strand_asym_haplotypes$AGE_BIN, levels = c("YOUNG", "OLD"))
+
+```
+
+Plotting our asym ratios across haplotypes
+
+```{r}
+
+age.labels = c("Young", "Old")
+names(age.labels) = c("YOUNG", "OLD")
+
+strand_asym_haplo_fig = ggplot(strand_asym_haplotypes, aes(x = TISSUE, y = AVG, color = STRAIN, group = STRAIN))
+
+strand_asym_haplo_fig = strand_asym_haplo_fig + 
+  geom_point() + 
+  facet_wrap(AGE_BIN~., nrow = 1, labeller = labeller(AGE_BIN = age.labels)) + 
+  geom_pointrange(aes(ymin=AVG-SE, ymax=AVG+SE)) + 
+  theme_bw(base_size = 16) + 
+  scale_color_manual(values = c("B6"= "#1d457f","AKR" = "#cc5c76", "ALR" = "#2f9e23", "F" = "#f57946", "NZB" = "#f7c22d")) +
+  ylab("Average ratio of mutation frequencies \n(G>A/C>T)") + 
+  xlab("Tissue") + 
+  scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12, 14, 16, 18, 20)) + 
+  theme(strip.background = element_blank(),
+        strip.text.x = element_text(size = 16),
+        axis.text.x = element_text(size = 14),
+        axis.text.y = element_text(size = 14),
+        legend.position = "none")
+  
+pdf(paste(outdir_figures,"haplo_strand_assym.pdf", sep=""),width=5,height=5)
+print(strand_asym_haplo_fig)
+dev.off()
+
+```
+
+Now we want to statistically test if there's a difference between the complementary average mutation frequencies for each condition
+
+```{r}
+#the dataframe we will be iterating through 
+t_test_serrano_df = serrano_mut_freqs_filled %>%
+  mutate(COND_LABEL = paste(STRAIN, TISSUE, AGE_BIN, sep = "_"))
+
+```
+
+
+```{r}
+#initialize our t-test results df 
+t_output = data.frame(CONDITION = character(),
+                      MUT_PAIR = character(),
+                      P_VAL = numeric(),
+                      T_STAT = numeric()
+)
+
+#loop through each condition in one loop via the LABEL field 
+for(label in COND_LABEL){
+  #subset our mutation freq df for just this label 
+  print(label)
+  
+  cond_subset_df = t_test_serrano_df %>%
+    filter(COND_LABEL == label)
+  
+  #loop through this subset for our specific mutation pairs that we can find via the PAIRS field
+  for(pair in MUT_PAIRS){
+    #break down the pair label based on the delim 
+    #assign the mutation and compliment to the variables 
+    #print variables 
+    print(pair) 
+    split = str_split(pair, "_")
+
+    #sigh totally breaking an abstraction here
+    mut = split[[1]][1]
+    comp_mut = split[[1]][2]
+    
+    print(mut)
+    print(comp_mut)
+    
+    #subset a df that has these mutation types 
+    t_test_df = cond_subset_df %>%
+      filter(MUT_TYPE == mut | MUT_TYPE == comp_mut)
+    
+    #run the t-test on this subset df
+    t_test_results = t.test(MUT_FREQ~MUT_TYPE,data=t_test_df)
+    
+    pval = t_test_results$p.value
+    stat = t_test_results$statistic
+    
+    #save the condition label, the mutation pair label, p-value, and statistic
+    output_results = c(label, pair, pval, stat)
+    
+    
+    #save results onto new row of the output table 
+    t_output[nrow(t_output) + 1,] = output_results
+  }
+}
+
+
+```
+Multiple hypothesis correcting 
+
+```{r}
+corrected_t_output = t_output %>%
+  mutate(P_ADJ = p.adjust(P_VAL, method="BH"))
+
+```
+
+```{r}
+
+corrected_t_output %>%
+  filter(P_ADJ < 0.01)
+
+```
+
+```{r}
+#exporting our strand bias t test results 
+#summary df of mutation type frequencies without the HFPs in our data 
+write.table(corrected_t_output, file = paste(outdir_files,"/serrano_t_test_results.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+```
+
+
+```{r}
+
+test = serrano_cond_snvs %>%
+  filter(MUT_TYPE == "G>A" | MUT_TYPE == "C>T") %>%
+  filter(COND_LABEL == "NZB_Liver_YOUNG")
+
+duplex_depth_subset = cond_duplex_ref_depth %>%
+  filter(COND_LABEL == "NZB_Liver_YOUNG")
+
+mut_count = test[test$MUT_TYPE == "G>A",]$COND_MUT_COUNT
+comp_mut_count = test[test$MUT_TYPE == "C>T",]$COND_MUT_COUNT
+
+mut_ref = str_split("G>A", ">")[[1]][1] 
+comp_ref = str_split("C>T", ">")[[1]][1] 
+
+mut_ref_count = duplex_depth_subset[duplex_depth_subset$REF == mut_ref,]$DP_SUM
+comp_ref_count = duplex_depth_subset[duplex_depth_subset$REF == comp_ref,]$DP_SUM
+
+#create contigency table
+con_tbl = matrix(c(mut_count, mut_ref_count, comp_mut_count, comp_ref_count), ncol = 2, byrow = F)
+      
+#running fisher's exact on the df 
+fishers_results = fisher.test(con_tbl, alternative = "two.sided")
+
+fishers_results
+
+```
+
+
+
+

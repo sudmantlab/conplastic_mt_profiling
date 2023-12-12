@@ -1,0 +1,235 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+
+```{r}
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/files/"
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/figures/"
+
+sel_supertable_file = "files/selection_analyses_summary_table.txt"
+sel_supertable = read.table(sel_supertable_file, sep = "\t", header = TRUE)
+
+```
+First we calculate the number of mutations in each bin:
+1) Aggregated analysis w/ D-Loop
+2) Aggregated analysis w/o D-Loop 
+3) Analysis split per bin 
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+per_bin_mut_counts_file = "files/total_mut_counts_all_bins_wo_dloop.txt"
+per_bin_mut_counts = read.table(per_bin_mut_counts_file, header = TRUE, sep = "\t")
+
+total_mut_count_wo_dloop_file = "../hnhs_wo_dloop/files/total_mut_count_wo_dloop.txt"
+mut_counts_wo_dloop = read.table(total_mut_count_wo_dloop_file, header = TRUE, sep = "\t")
+
+total_mut_count_w_dloop_file = "../files/mut_count_wo_hfps.txt"
+mut_count_w_dloop = read.table(total_mut_count_w_dloop_file, header = TRUE, sep = "\t")
+
+```
+Preparing each dataframe to be merged -- we count the number of mutations in each bin: 
+
+```{r}
+per_bin_merge = per_bin_mut_counts %>%
+  select(BIN, TOTAL_MUT_COUNT) %>%
+  group_by(BIN) %>%
+  summarise(COUNT = sum(TOTAL_MUT_COUNT))
+```
+
+```{r}
+wo_dloop_merge = mut_counts_wo_dloop %>%
+  mutate(BIN = "AGG_WO_DLOOP") %>%
+  select(BIN, HET_COUNT) %>% 
+  group_by(BIN) %>%
+  summarise(COUNT = sum(HET_COUNT))
+
+```
+
+```{r}
+w_dloop_merge = mut_count_w_dloop %>%
+  mutate(BIN = "AGG_W_DLOOP") %>%
+  select(BIN, HET_COUNT) %>% 
+  group_by(BIN) %>%
+  summarise(COUNT = sum(HET_COUNT))
+```
+
+Merging all of our mutation count information:
+```{r}
+mut_count_plotting_df = rbind(per_bin_merge, wo_dloop_merge, w_dloop_merge) %>%
+  mutate(FACET = ifelse(grepl("AGG", BIN), "All", "Binned (- D-Loop)"))
+
+mut_count_plotting_df$BIN = factor(mut_count_plotting_df$BIN, levels = c("AGG_W_DLOOP", "AGG_WO_DLOOP","upper-5e-5", "upper-1e-4", "upper-1e-3", "upper-1e-2", "upper-1"))
+```
+
+```{r}
+
+rm(per_bin_merge, wo_dloop_merge, w_dloop_merge)
+
+```
+
+Plotting our mutation count distribution: 
+https://stackoverflow.com/questions/52341385/how-to-automatically-adjust-the-width-of-each-facet-for-facet-wrap
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+mut_count_dist = ggplot(mut_count_plotting_df, aes(x = BIN, y = COUNT)) + 
+  geom_bar(stat = "identity") + 
+  facet_grid(.~FACET, scales="free", space = "free") + 
+  theme_bw(base_size = 14) + 
+  scale_x_discrete(labels = c("AGG_W_DLOOP" = "+ D-Loop", "AGG_WO_DLOOP" = "- D-Loop","upper-5e-5" = "(0, 5e-5]", "upper-1e-4" = "(5e-5, 1e-4]", "upper-1e-3" = "(1e-4, 1e-3]", "upper-1e-2" = "(1e-3, 1e-2]", "upper-1" = "(1e-2, 1]")) + 
+  xlab("Frequency bin") + 
+  ylab("Mutation Counts") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 8),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(size = 9.5),
+        axis.title.x = element_text(size = 9.5),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 10.25))
+
+pdf(paste(outdir_figures,"/dist_muts_per_bin.pdf", sep=""),width=3.25,height=2.5)
+print(mut_count_dist)
+dev.off()
+
+
+```
+We calculate the proportion of significant hits per bin out of all the ratios we were able to calculate: 
+
+```{r}
+
+all_bins_poss_ratios = sel_supertable %>%
+  select(BIN, POSSIBLE_RATIOS) %>%
+  unique()
+
+```
+
+```{r}
+
+sel_sig_counts = sel_supertable %>%
+  #filter for our sig hits
+  filter(P_ADJ < 0.01) %>%
+  select(BIN, POSSIBLE_RATIOS) %>%
+  group_by(BIN, POSSIBLE_RATIOS) %>%
+  #within each bin how many sig hits do we have
+  summarise(SIG_COUNT = n())
+
+```
+
+```{r}
+
+sig_hit_signals_plotting = all_bins_poss_ratios %>%
+  #to have all bins represented in the figure 
+  left_join(sel_sig_counts, by = c("BIN", "POSSIBLE_RATIOS")) %>%
+  ungroup() %>%
+  mutate(SIG_COUNT =  ifelse(is.na(SIG_COUNT), 0, SIG_COUNT)) %>%
+  mutate(PROP = SIG_COUNT/POSSIBLE_RATIOS) %>%
+  mutate(FACET = ifelse(grepl("AGG", BIN), "All", "Binned (- D-Loop)"))
+
+sig_hit_signals_plotting$BIN = factor(sig_hit_signals_plotting$BIN, levels = c("AGG_W_DLOOP", "AGG_WO_DLOOP","upper-5e-5", "upper-1e-4", "upper-1e-3", "upper-1e-2", "upper-1"))
+
+```
+
+
+```{r}
+
+prop_sig_hits_plot = ggplot(sig_hit_signals_plotting, aes(x = BIN, y = PROP)) + 
+  geom_bar(stat = "identity") + 
+  facet_grid(.~FACET, scales="free", space = "free") + 
+  theme_bw() + 
+  scale_x_discrete(labels = c("AGG_W_DLOOP" = "+ D-Loop", "AGG_WO_DLOOP" = "- D-Loop", "upper-5e-5" = "(0, 5e-5]", "upper-1e-4" = "(5e-5, 1e-4]", "upper-1e-3" = "(1e-4, 1e-3]", "upper-1e-2" = "(1e-3, 1e-2]", "upper-1" = "(1e-2, 1]")) + 
+  ylim(0, 0.3)+ 
+  xlab("Frequency bin") + 
+  ylab("Proportion \n[# of sig genes/# of ratios calculated]") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 8),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(size = 9.5),
+        axis.title.x = element_text(size = 9.5),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 10.25))
+
+pdf(paste(outdir_figures,"/prop_sig_hits_plot.pdf", sep=""),width=3,height=3)
+print(prop_sig_hits_plot)
+dev.off()
+
+```
+
+Type of selection within these bins
+
+```{r}
+
+type_sel_counts = sel_supertable %>%
+  #filter our significant ratios 
+  filter(P_ADJ < 0.01) %>%
+  select(BIN, OBS_HNHS, P_ADJ) %>%
+  mutate(SEL = ifelse(OBS_HNHS < 1, "N", "P")) %>%
+  select(BIN, SEL) %>%
+  group_by(BIN, SEL) %>%
+  #counting the number of positive and negative selection in each bin
+  summarise(COUNT = n())
+
+```
+
+```{r}
+#making sure that each bin and selection combo is represented in the final figure
+BIN = rep(c(all_bins_poss_ratios$BIN, "upper-1e-2", "upper-1"), each = 2)
+SEL = rep(c("N", "P"), 7)
+
+dummy_df = cbind(data.frame(BIN), data.frame(SEL))
+
+```
+
+Merging our dummy df and our selection df for plotting 
+
+```{r}
+plotting_sel_count = dummy_df %>%
+  left_join(type_sel_counts, by = c("BIN", "SEL")) %>%
+  mutate(COUNT = ifelse(is.na(COUNT), 0, COUNT)) %>%
+  mutate(FACET = ifelse(grepl("AGG", BIN), "All", "Binned (- D-Loop)"))
+
+plotting_sel_count$BIN = factor(plotting_sel_count$BIN, levels = c("AGG_W_DLOOP", "AGG_WO_DLOOP","upper-5e-5", "upper-1e-4", "upper-1e-3", "upper-1e-2", "upper-1"))
+```
+
+```{r}
+type_sel = ggplot(plotting_sel_count, aes(x = BIN, y = COUNT, fill = SEL)) + 
+  geom_bar(stat = "identity", position = position_dodge()) + 
+  facet_grid(.~FACET, scales="free", space = "free") + 
+  theme_bw() + 
+  scale_fill_manual(values = c("#a45851", "#5d74a5"), name = "Selection", labels = c("Negative", "Positive")) + 
+  scale_x_discrete(labels = c("AGG_W_DLOOP" = "+ D-Loop", "AGG_WO_DLOOP" = "- D-Loop", "upper-5e-5" = "(0, 5e-5]", "upper-1e-4" = "(5e-5, 1e-4]", "upper-1e-3" = "(1e-4, 1e-3]", "upper-1e-2" = "(1e-3, 1e-2]", "upper-1" = "(1e-2, 1]")) + 
+  xlab("Frequency bin") + 
+  ylab("Count") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 7),
+        axis.text.y = element_text(size = 7),
+        axis.title.y = element_text(size = 8.5),
+        axis.title.x = element_text(size = 8.5),
+        strip.background = element_blank(),
+        strip.text.x = element_text(size = 9),
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/type_sel_plot.pdf", sep=""),width=3,height=2)
+print(type_sel)
+dev.off()
+
+pdf(paste(outdir_figures,"/leg_type_sel_plot.pdf", sep=""),width=3.75,height=2.5)
+print(type_sel + theme(legend.position = "bottom"))
+dev.off()
+```
+
+```{r}
+
+sel_supertable %>%
+  filter(P_ADJ < 0.01) %>%
+  filter(OBS_HNHS < 1)
+```

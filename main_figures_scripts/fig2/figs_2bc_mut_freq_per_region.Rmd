@@ -1,0 +1,408 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(PNWColors)
+library(gridExtra)
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/mutation_frequency_per_region/figures/"
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/mutation_frequency_per_region/files/"
+
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+coordinates_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/Mouse_Mt_Genome_Coordinates"
+coordinates = read.table(coordinates_file, stringsAsFactors = FALSE, sep = "\t")
+```
+
+```{r}
+#adding the D-Loop coordinates to our file 
+coordinates[nrow(coordinates) + 1, ] <- c("D-Loop", 15422, 16299)
+
+#adding column names to dataframe
+colnames(coordinates) <- c("GENE", "START", "END")
+
+coordinates$START <- as.numeric(coordinates$START)
+coordinates$END <- as.numeric(coordinates$END)
+
+#so things don't get wonky if the coordinates are read as strings -- also we convert our coordinates to be 0-indexed 
+coordinates$START <- as.numeric(coordinates$START) - 1
+coordinates$END <- as.numeric(coordinates$END) - 1
+
+coordinates = coordinates %>%
+  mutate(TYPE = case_when(grepl("mt-R", GENE) ~ "rRNA",
+                          grepl("mt-T", GENE) ~ "tRNA", 
+                          GENE == "D-Loop" ~ "D-Loop",
+                          GENE == "mt-OL" ~ "OriL",
+                          grepl("mt-[N|A|C]",GENE) ~ "Protein",
+                          TRUE ~ "Intergene"))
+```
+
+We need to figure out the length of each region in order to normalize by length. 
+
+```{r}
+
+length_of_region = coordinates %>%
+  mutate(LENGTH_OF_GENE = (END - START) + 1) %>%
+  filter(TYPE != "Intergene") %>%
+  select(TYPE, LENGTH_OF_GENE) %>%
+  group_by(TYPE) %>%
+  summarise(LENGTH_OF_TYPE = sum(LENGTH_OF_GENE))
+
+```
+
+Now, we need to figure out the average read depth of each region for every condition 
+
+```{r}
+
+avg_read_depth_per_region = supertable %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, GENE, START, READ_DEPTH_AT_POS) %>% 
+  #unique here so that we eliminate redundancy from multiple mutation types
+  unique() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, START, READ_DEPTH_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE, START) %>% 
+  summarise(COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, START, COND_READ_DEPTH_AT_POS) %>% 
+  mutate(TYPE = case_when(grepl("mt-R", GENE) ~ "rRNA",
+                          grepl("mt-T", GENE) ~ "tRNA", 
+                          GENE == "D-Loop" ~ "D-Loop",
+                          GENE == "mt-OL" ~ "OriL",
+                          grepl("mt-[N|A|C]",GENE) ~ "Protein",
+                          TRUE ~ "Intergene")) %>% 
+  #filtering out those few bp that exist between these regions
+  filter(TYPE != "Intergene") %>%
+  select(STRAIN, TISSUE, AGE_BIN, TYPE, COND_READ_DEPTH_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, TYPE) %>% 
+  summarise(AVG_READ_DEPTH_REGION = mean(COND_READ_DEPTH_AT_POS))
+
+```
+
+We want to normalize for sequencing depth across our conditions (i.e. we wouldn't capture mutations if we didn't sequence to the level that we did in some samples): 
+
+```{r}
+norm_seq_depth = supertable %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, GENE, START, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS, CONDITION_MUT_FREQ_AT_POS) %>%
+  group_by(SAMPLE, STRAIN, TISSUE, AGE_BIN, GENE, START, READ_DEPTH_AT_POS, CONDITION_MUT_FREQ_AT_POS) %>% 
+  summarise(SAMPLE_MUT_COUNT_AT_POS = sum(ALT_ALLELE_DEPTH)) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, START, SAMPLE_MUT_COUNT_AT_POS, READ_DEPTH_AT_POS, CONDITION_MUT_FREQ_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE, START, CONDITION_MUT_FREQ_AT_POS) %>% 
+  summarise(CONDITION_MUT_COUNT_AT_POS = sum(SAMPLE_MUT_COUNT_AT_POS), CONDITION_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>%
+  ungroup() %>% 
+  group_by(GENE, START) %>% 
+  mutate(MIN_READ_DEPTH_AT_POS = min(CONDITION_READ_DEPTH_AT_POS)) %>% 
+  #this is the lowest mutation frequency we would be able to get given the smallest read depth at a position across our conditions
+  mutate(FLOOR_MIN_MUT_FREQ_AT_POS = 1/MIN_READ_DEPTH_AT_POS) %>% 
+  #if our mutation frequency is lower than the floor we set, we reset our condition mutation count to 0 --> in essence we wouldn't have been able to capture these mutations without the sequencing depth we had 
+  mutate(CONDITION_MUT_COUNT_AT_POS = ifelse(CONDITION_MUT_FREQ_AT_POS < FLOOR_MIN_MUT_FREQ_AT_POS, 0, CONDITION_MUT_COUNT_AT_POS)) 
+  
+  
+```  
+  
+Process our condition mutation count now that we've normalized for sequencing depth: 
+```{r}
+
+region_mut_freq_df = norm_seq_depth %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, CONDITION_MUT_COUNT_AT_POS) %>% 
+  mutate(TYPE = case_when(grepl("mt-R", GENE) ~ "rRNA",
+                          grepl("mt-T", GENE) ~ "tRNA", 
+                          GENE == "D-Loop" ~ "D-Loop",
+                          GENE == "mt-OL" ~ "OriL",
+                          grepl("mt-[N|A|C]",GENE) ~ "Protein",
+                          TRUE ~ "Intergene")) %>% 
+  #filtering out those few bp that exist between these regions
+  filter(TYPE != "Intergene") %>%
+  select(STRAIN, TISSUE, AGE_BIN, TYPE, CONDITION_MUT_COUNT_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, TYPE) %>% 
+  summarise(CONDITION_MUT_COUNT_REGION = sum(CONDITION_MUT_COUNT_AT_POS))
+
+
+```
+
+Processing our condition mutation count WO identified outliers 
+
+```{r}
+
+wo_hfps_region_mut_freq_df = norm_seq_depth %>% 
+  filter(CONDITION_MUT_FREQ_AT_POS < 0.001) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, CONDITION_MUT_COUNT_AT_POS) %>% 
+  mutate(TYPE = case_when(grepl("mt-R", GENE) ~ "rRNA",
+                          grepl("mt-T", GENE) ~ "tRNA", 
+                          GENE == "D-Loop" ~ "D-Loop",
+                          GENE == "mt-OL" ~ "OriL",
+                          grepl("mt-[N|A|C]",GENE) ~ "Protein",
+                          TRUE ~ "Intergene")) %>% 
+  #filtering out those few bp that exist between these regions
+  filter(TYPE != "Intergene") %>%
+  select(STRAIN, TISSUE, AGE_BIN, TYPE, CONDITION_MUT_COUNT_AT_POS) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, TYPE) %>% 
+  summarise(WO_HFPS_CONDITION_MUT_COUNT_REGION = sum(CONDITION_MUT_COUNT_AT_POS))
+  
+```
+
+```{r}
+rm(supertable)
+```
+
+
+Now combining all of our dataframes to make one large df with our info -- our summary df for the info without HFPs
+
+```{r}
+
+summary_df = wo_hfps_region_mut_freq_df %>% 
+  full_join(region_mut_freq_df, by = c("STRAIN", "TISSUE", "AGE_BIN", "TYPE")) %>% 
+  left_join(length_of_region, by = "TYPE") %>% 
+  left_join(avg_read_depth_per_region, by =  c("STRAIN", "TISSUE", "AGE_BIN", "TYPE")) %>% 
+  mutate(WO_HFPS_PERC_REGION_MUTATED = WO_HFPS_CONDITION_MUT_COUNT_REGION/(LENGTH_OF_TYPE*AVG_READ_DEPTH_REGION)) %>%
+  mutate(HFPS_PERC_REGION_MUTATED = CONDITION_MUT_COUNT_REGION/(LENGTH_OF_TYPE*AVG_READ_DEPTH_REGION))
+```
+
+```{r}
+
+write.table(summary_df, file = paste(outdir_files,"/mut_freq_per_region.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+Calculating statistics for our comparisons: 
+
+1) Avg % region mutated in OriL compared to D-Loop 
+
+```{r}
+
+summary_df %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, TYPE, WO_HFPS_PERC_REGION_MUTATED) %>% 
+  filter(TYPE == "D-Loop" | TYPE == "OriL") %>% 
+  mutate(TYPE = recode(TYPE, "D-Loop" = "DLOOP")) %>% 
+  pivot_wider(names_from = TYPE, values_from = WO_HFPS_PERC_REGION_MUTATED) %>% 
+  mutate(FOLD_CHANGE = OriL/DLOOP) %>%
+  select(STRAIN, TISSUE, AGE_BIN, FOLD_CHANGE) %>% 
+  group_by(AGE_BIN) %>% 
+  summarise(AVG_FOLD_CHANGE = mean(FOLD_CHANGE), MEDIAN_FOLD_CHANGE = median(FOLD_CHANGE))
+
+
+```
+Avg % region mutated in OriL compared to the functional coding regions: 
+
+```{r}
+summary_df %>% 
+  ungroup() %>% 
+  filter(TYPE != "D-Loop") %>% 
+  mutate(TYPE = ifelse(TYPE == "OriL", TYPE, "RNA_CODING")) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, TYPE) %>%
+  summarise(SUM_MUT_COUNT_WO_HFPS = sum(WO_HFPS_CONDITION_MUT_COUNT_REGION), AVG_DEPTH = mean(AVG_READ_DEPTH_REGION), SUM_LENGTH_OF_REGIONS = sum(LENGTH_OF_TYPE)) %>% 
+  mutate(PERC_REGION_MUT = SUM_MUT_COUNT_WO_HFPS/(AVG_DEPTH * SUM_LENGTH_OF_REGIONS)) %>%
+  select(STRAIN, TISSUE, AGE_BIN, TYPE, PERC_REGION_MUT) %>%
+  pivot_wider(values_from = PERC_REGION_MUT, names_from = TYPE) %>% 
+  mutate(FOLD_CHANGE = OriL/RNA_CODING) %>%
+  select(STRAIN, TISSUE, AGE_BIN, FOLD_CHANGE) %>% 
+  group_by(AGE_BIN) %>% 
+  summarise(AVG_FOLD_CHANGE = mean(FOLD_CHANGE), MEDIAN_FOLD_CHANGE = median(FOLD_CHANGE))
+
+```
+
+2) Statistical difference in mutation frequency between D-Loop at RNA coding regions
+
+```{r}
+
+t_test_df = summary_df %>% 
+  ungroup() %>% 
+  filter(TYPE != "OriL") %>% 
+  mutate(TYPE = recode(TYPE, "D-Loop" = "DLOOP")) %>% 
+  mutate(TYPE = ifelse(TYPE == "DLOOP", TYPE, "RNA_CODING")) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, TYPE) %>%
+  summarise(SUM_MUT_COUNT_WO_HFPS = sum(WO_HFPS_CONDITION_MUT_COUNT_REGION), AVG_DEPTH = mean(AVG_READ_DEPTH_REGION), SUM_LENGTH_OF_REGIONS = sum(LENGTH_OF_TYPE)) %>% 
+  mutate(PERC_REGION_MUT = SUM_MUT_COUNT_WO_HFPS/(AVG_DEPTH * SUM_LENGTH_OF_REGIONS)) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, TYPE, PERC_REGION_MUT) %>%
+  pivot_wider(values_from = PERC_REGION_MUT, names_from = TYPE)
+
+avg_perc_mut = summary_df %>% 
+  ungroup() %>% 
+  filter(TYPE != "OriL") %>% 
+  mutate(TYPE = recode(TYPE, "D-Loop" = "DLOOP")) %>% 
+  mutate(TYPE = ifelse(TYPE == "DLOOP", TYPE, "RNA_CODING")) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, TYPE) %>%
+  summarise(SUM_MUT_COUNT_WO_HFPS = sum(WO_HFPS_CONDITION_MUT_COUNT_REGION), AVG_DEPTH = mean(AVG_READ_DEPTH_REGION), SUM_LENGTH_OF_REGIONS = sum(LENGTH_OF_TYPE)) %>% 
+  mutate(PERC_REGION_MUT = SUM_MUT_COUNT_WO_HFPS/(AVG_DEPTH * SUM_LENGTH_OF_REGIONS)) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, TYPE, PERC_REGION_MUT) %>% 
+  group_by(AGE_BIN, TYPE) %>%
+  summarise(AVG = mean(PERC_REGION_MUT))
+
+young = t_test_df %>% 
+  filter(AGE_BIN == "YOUNG")
+
+old = t_test_df %>% 
+  filter(AGE_BIN == "OLD")
+  
+print(t_test_df)
+print(avg_perc_mut)
+
+t.test(young$DLOOP, young$RNA_CODING, paired = TRUE, alternative = "two.sided")
+t.test(old$DLOOP, old$RNA_CODING, paired = TRUE, alternative = "two.sided")
+```
+
+Plotting the dot plots wo outliers
+
+Colors: 
+
+```{r}
+library(RColorBrewer)
+library(PNWColors)
+
+lake_pal <- pnw_palette(name="Lake", type="discrete")
+spectral = brewer.pal(11,"Spectral")
+PRGn = brewer.pal(11,"PRGn")
+set1 = brewer.pal(3,"Set1")
+PuRd = brewer.pal(11,"PuRd")
+Blues = brewer.pal(9, "Blues")
+
+colors = c(Blues[9], lake_pal[6], set1[1], PuRd[6],PRGn[4])
+colors_in_order = c(set1[1], Blues[9], PRGn[4], lake_pal[6], PuRd[6] )
+
+```
+Percent of region mutated across conditions 
+
+```{r}
+
+summary_df$AGE_BIN = factor(summary_df$AGE_BIN, level = c("YOUNG", "OLD"))
+summary_df$TYPE= factor(summary_df$TYPE, level=c("OriL","D-Loop","tRNA", "Protein", "rRNA")) 
+summary_df$STRAIN= factor(summary_df$STRAIN, level=c("B6", "AKR", "ALR", "FVB", "NZB")) 
+
+summary_df = summary_df %>%
+  mutate(TISSUE = recode(TISSUE, "Brain" = "B", "Heart" = "H", "Liver" = "L"))
+
+mut_freq_per_region_wo_hfps=ggplot(summary_df)
+
+mut_freq_per_region_wo_hfps=mut_freq_per_region_wo_hfps+
+  geom_point(aes(y=WO_HFPS_PERC_REGION_MUTATED, size=WO_HFPS_PERC_REGION_MUTATED, x=STRAIN, color=TYPE,shape= AGE_BIN, group= TISSUE), alpha=0.8)+
+  facet_wrap(TYPE~TISSUE,nrow=1, strip.position = "bottom")+
+  #facet_wrap(TISSUE~TYPE,nrow=1, strip.position = "bottom")+
+  #facet_wrap(~TYPE,nrow=1)+
+  theme_bw(base_size=6)+
+  theme(strip.background = element_blank())+
+  scale_shape_manual(name = "Age", labels = c("Young", "Old"), values=c(1,19))+
+  #theme(legend.position="None")+
+  theme(panel.grid = element_blank())+
+  theme(axis.text.x=element_text(angle=90, hjust=1, vjust=1))+
+  scale_x_discrete("Strain", position = "top")+
+  scale_y_continuous("P(mutated)")+
+  #scale_alpha_manual(values=c(0.6,0.8,1))+
+  scale_size_continuous(name = "Frequency", range=c(.1,4))+
+  scale_color_manual(values = colors_in_order) +
+  #theme(legend.position = "none") +
+  theme(axis.text.x=element_text(size=3.5),
+        axis.text.y=element_text(size=7),
+        axis.title.y = element_text(size = 8),
+        axis.title.x = element_text(size = 8.25),
+        strip.text.x = element_text(size = 8), 
+        legend.text = element_text(size = 6),
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/wo_outliers_mut_freq_per_region.pdf",sep=""), width=8.5,height=2)
+print(mut_freq_per_region_wo_hfps)
+dev.off()
+
+pdf(paste(outdir_figures,"/leg_wo_outliers_mut_freq_per_region.pdf",sep=""), width=8.5,height=3)
+print(mut_freq_per_region_wo_hfps + theme(legend.position = "bottom"))
+dev.off()
+
+
+
+```
+
+```{r}
+
+summary_df$AGE_BIN = factor(summary_df$AGE_BIN, level = c("YOUNG", "OLD"))
+summary_df$TYPE= factor(summary_df$TYPE, level=c("OriL","D-Loop","tRNA", "Protein", "rRNA")) 
+summary_df$STRAIN= factor(summary_df$STRAIN, level=c("B6", "AKR", "ALR", "FVB", "NZB")) 
+
+summary_df = summary_df %>%
+  mutate(TISSUE = recode(TISSUE, "Brain" = "B", "Heart" = "H", "Liver" = "L"))
+
+#t$TISSUE=factor(t$TISSUE, levels=c("Liver","Heart","Brain")) 
+
+#g=ggplot(t %>% filter(TISSUE == "Brain"))
+log_mut_freq_per_region_wo_hfps=ggplot(summary_df)
+
+log_mut_freq_per_region_wo_hfps=log_mut_freq_per_region_wo_hfps+geom_point(aes(y=WO_HFPS_PERC_REGION_MUTATED,size=WO_HFPS_PERC_REGION_MUTATED,x=STRAIN,color=TYPE,shape=AGE_BIN,group=TISSUE),alpha=0.8)+
+  facet_wrap(TYPE~TISSUE,nrow=1)+
+  #facet_wrap(TISSUE~TYPE,nrow=3)+
+  #facet_wrap(~TYPE,nrow=1)+
+  theme_bw(base_size=6)+
+  theme(strip.background = element_blank())+
+  scale_shape_manual(values=c(1,19))+
+  #theme(legend.position="None")+
+  theme(panel.grid = element_blank())+
+  theme(axis.text.x=element_text(angle=90, hjust=1, vjust=1))+
+  scale_x_discrete("Strain")+
+  #scale_y_continuous("P(mutated)")+
+  scale_y_log10("P(mutated)") +
+  #scale_alpha_manual(values=c(0.6,0.8,1))+
+  scale_size_continuous(range=c(.1,4))+
+  scale_color_manual(values = colors_in_order) +
+  #theme(legend.position = "none") +
+  theme(axis.text.x=element_text(size=3.5),
+        axis.text.y=element_text(size=7),
+        axis.title = element_text(size = 9),
+        strip.text.x = element_text(size = 8), 
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/log_wo_outliers_mut_freq_per_region.pdf",sep=""), width=8.5,height=3)
+print(log_mut_freq_per_region_wo_hfps)
+dev.off()
+
+
+```
+
+Summary figure of delta values without high frequency positions
+
+```{r}
+summary_wo_hfps_spread  = summary_df %>% 
+  filter(!(STRAIN == "B6" & TISSUE == "L")) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, TYPE, WO_HFPS_PERC_REGION_MUTATED) %>% 
+  pivot_wider(names_from = AGE_BIN, values_from = WO_HFPS_PERC_REGION_MUTATED) %>% 
+  mutate(DELTA = OLD - YOUNG)
+
+```
+
+```{r}
+
+summary_wo_hfps_spread$TISSUE=factor(summary_wo_hfps_spread$TISSUE, levels=c("L","B","H")) 
+
+g=ggplot(summary_wo_hfps_spread)
+g=g+
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray") + 
+  stat_summary(aes(x=DELTA,y=TISSUE,color=TYPE,group=TISSUE,shape=TISSUE), size = 0.3)+
+  theme_bw(base_size=6)+
+  facet_grid(~TYPE)+
+  ylab("Tissue") + 
+  xlab("Delta % mutated per region (old - young)") + 
+  scale_color_manual(values = colors_in_order) +
+  scale_shape_manual(values = c(15, 19, 17)) + 
+  theme(strip.background = element_blank())+
+  theme(legend.position="None")+
+  theme(panel.grid = element_blank())+
+  theme(axis.text.x=element_text(size = 6, angle = 45, vjust = 1, hjust = 1), 
+        axis.text.y =element_text(size = 6),
+        axis.title = element_text(size = 7), 
+        strip.text.x = element_text(size = 6), 
+        text = element_text(family = "sans"))
+
+pdf(paste(outdir_figures,"/wo_outliers_mut_freq_per_region_summary.pdf",sep=""),width= 7,height=1)
+print(g)
+dev.off()
+
+```

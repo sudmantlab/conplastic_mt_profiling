@@ -1,0 +1,133 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+library(tidyverse)
+```
+
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+outdir_files ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/files/"
+
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+Mutation count with HFPs: 
+
+```{r}
+
+mut_count = supertable %>% 
+  #reduce redundancy in mutations if mutations are located in multiple gene regions 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, VARIANT_TYPE, ALT_ALLELE_DEPTH) %>% 
+  unique() %>% 
+  filter(VARIANT_TYPE == "SNV") %>% 
+  select(STRAIN, TISSUE, AGE_BIN, ALT_ALLELE_DEPTH) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>% 
+  summarise(HET_COUNT = sum(ALT_ALLELE_DEPTH)) %>% 
+  #this is needed so that the FVB strain name matches across files -- ugh
+  mutate(STRAIN = recode(STRAIN, "FVB" = "F"))
+  
+```
+
+Mutation count without HFPs: 
+
+```{r}
+
+mut_count_wo_hfps = supertable %>% 
+  #reduce redundancy in mutations if mutations are located in multiple gene regions 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, VARIANT_TYPE, ALT_ALLELE_DEPTH, CONDITION_MUT_FREQ_AT_POS, HFP_THRESHOLD) %>% 
+  unique() %>%
+  #filter out indels and any HFPs from the analysis 
+  filter(VARIANT_TYPE == "SNV") %>%
+  filter(CONDITION_MUT_FREQ_AT_POS < HFP_THRESHOLD) %>% 
+  #process as before: creating the mutation type and counting the number of mutations in a condition 
+  select(STRAIN, TISSUE, AGE_BIN, ALT_ALLELE_DEPTH) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN) %>% 
+  summarise(HET_COUNT = sum(ALT_ALLELE_DEPTH)) %>%
+  mutate(STRAIN = recode(STRAIN, "FVB" = "F"))
+
+```
+
+Calculating the proportions of each mutation type within a given condition: 
+
+```{r}
+
+mut_prop = supertable %>% 
+  #reduce redundancy in mutations if mutations are located in multiple gene regions 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, VARIANT_TYPE, ALT_ALLELE_DEPTH) %>% 
+  unique() %>% 
+  filter(VARIANT_TYPE == "SNV") %>% 
+  mutate(MUTATION_TYPE = paste(REF, ALT, sep = ">")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, ALT_ALLELE_DEPTH) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE) %>% 
+  summarise(MUT_TYPE_COUNT = sum(ALT_ALLELE_DEPTH)) %>% 
+  ungroup() %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN) %>% 
+  mutate(MUT_TOTAL = sum(MUT_TYPE_COUNT)) %>% 
+  mutate(HET_PROP = MUT_TYPE_COUNT/ MUT_TOTAL) %>%
+  mutate(STRAIN = recode(STRAIN, "FVB" = "F"))
+
+```
+
+Calculating mutation proportions without the hfps
+
+```{r}
+mut_prop_wo_hfps = supertable %>% 
+  #reduce redundancy in mutations if mutations are located in multiple gene regions 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, VARIANT_TYPE, ALT_ALLELE_DEPTH, CONDITION_MUT_FREQ_AT_POS, HFP_THRESHOLD) %>% 
+  unique() %>%
+  #filter out indels and any HFPs from the analysis 
+  filter(VARIANT_TYPE == "SNV") %>%
+  filter(CONDITION_MUT_FREQ_AT_POS < HFP_THRESHOLD) %>% 
+  mutate(MUTATION_TYPE = paste(REF, ALT, sep = ">")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, ALT_ALLELE_DEPTH) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE) %>% 
+  summarise(MUT_TYPE_COUNT = sum(ALT_ALLELE_DEPTH)) %>% 
+  ungroup() %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN) %>% 
+  mutate(MUT_TOTAL = sum(MUT_TYPE_COUNT)) %>% 
+  mutate(HET_PROP = MUT_TYPE_COUNT/ MUT_TOTAL) %>%
+  mutate(STRAIN = recode(STRAIN, "FVB" = "F"))
+
+#FVB Brain Young is missing a mutation type after filtering out HFP positions 
+mut_prop_wo_hfps[nrow(mut_prop_wo_hfps) + 1,] = list("F", "Brain", "YOUNG", "T>G", 0 , 2436, 0)
+```
+
+Output files: 
+
+
+```{r}
+mut_count_file_path = paste(outdir_files, "mut_count.txt", sep = "")
+mut_count_wo_hfps_file_path = paste(outdir_files, "mut_count_wo_hfps.txt", sep = "")
+
+mut_prop_file_path = paste(outdir_files, "mut_prop.txt", sep = "")
+mut_prop_wo_hfps_file_path = paste(outdir_files, "mut_prop_wo_hfps.txt", sep = "")
+
+write.table(mut_count, mut_count_file_path, row.names = FALSE, sep = "\t")
+write.table(mut_count_wo_hfps, mut_count_wo_hfps_file_path, row.names = FALSE, sep = "\t")
+write.table(mut_prop, mut_prop_file_path, row.names = FALSE, sep = "\t")
+write.table(mut_prop_wo_hfps, mut_prop_wo_hfps_file_path, row.names = FALSE, sep = "\t")
+
+```
+
+Figuring out which condition was missing a mutation type after filtering out HFPs: FVB Brain Young T>G
+```{r}
+mut_prop_wo_hfps %>% 
+  ungroup() %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN) %>% 
+  summarise(COUNTS = n())
+
+mut_prop_wo_hfps %>% 
+  filter(STRAIN == "FVB", TISSUE == "Brain", AGE_BIN == "YOUNG")
+
+mut_prop %>% 
+  filter(STRAIN == "FVB", TISSUE == "Brain", AGE_BIN == "YOUNG")
+```

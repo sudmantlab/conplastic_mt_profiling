@@ -1,0 +1,389 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/figures/"
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/"
+
+sc_supertable_file = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/sc2023_mouse_aging/files/sc2023_mouse_aging_supertable.txt"
+
+sc_summary_file = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/sc2023_mouse_aging/files/Mouse_aging_mtDNA_summary.csv"
+
+#note specifying the delimeter eliminates the rows with ## or # in the entry -- the headers that were not filtered out because these 3 files had 2 more header lines than the other files 
+sc_supertable = read.table(sc_supertable_file, sep = '\t', header = TRUE)
+
+sc_summary = read.csv(sc_summary_file, header = TRUE )
+```
+
+```{r}
+
+sc_supertable %>%
+  filter(Treatment == "NT")
+  
+
+```
+
+Let's find the NT samples and the DP depth for each nucleotide per sample 
+
+1. Checking the ratio of Cs to Gs -- ranges from ~1.93 - 2 
+```{r}
+sc_summary %>%
+  filter(Treatment == "NT") %>% 
+  select(MouseID, Age, Treatment, Tissue, C.s_Sequenced, G.s_Sequenced) %>%
+  mutate(RATIO = C.s_Sequenced/G.s_Sequenced)
+  
+```
+2. Creating our dataframe for merging 
+```{r}
+
+sc_duplex_ref = sc_summary %>%
+  filter(Treatment == "NT") %>% 
+  select(MouseID, Age, Treatment, Tissue, A.s_Sequenced, T.s_Sequenced, C.s_Sequenced, G.s_Sequenced) %>%
+  pivot_longer(cols = A.s_Sequenced:G.s_Sequenced, names_to = "NUC_TYPE", values_to = "DP_BP") %>% 
+  mutate(REF = recode(NUC_TYPE, A.s_Sequenced = "A",
+                      T.s_Sequenced = "T",
+                      C.s_Sequenced = "C",
+                      G.s_Sequenced = "G")) %>%
+  select(MouseID, Age, Treatment, Tissue, REF, DP_BP) %>%
+  mutate(AGE_BIN = ifelse(Age == 26, "OLD", "YOUNG")) %>%
+  select(MouseID, Tissue, AGE_BIN, REF, DP_BP)
+  
+
+```
+
+Now, we count the de novo mutations
+
+```{r}
+sc_de_novo_muts = sc_supertable %>%
+  filter(Treatment == "NT") %>% 
+  #this is where we start to filter for de novo mutations
+  #we remove ~200 mutations 
+  filter(ALT_ALLELE_DEPTH < 100) %>%
+  #calculate the mutation frequency at each position for each sample
+  mutate(MUT_FREQ = ALT_ALLELE_DEPTH/READ_DEPTH_AT_POS) %>%
+  #filter any mutation with a frequency > 1% 
+  filter(MUT_FREQ < 0.01) %>%
+  #filter out any position that did not have a mutation
+  filter(MUT_FREQ > 0) %>%
+  mutate(AGE_BIN = ifelse(Age == 26, "OLD", "YOUNG")) %>%
+  select(MouseID, AGE_BIN, Tissue, POS, REF, ALT) %>%
+  #scoring each mutation type once 
+  unique() %>%
+  #filtering for SNVs
+  filter(nchar(REF) == 1) %>%
+  filter(nchar(ALT) == 1) %>%
+  mutate(MUT_TYPE = paste(REF, ALT, sep = ">")) %>%
+  select(MouseID, AGE_BIN, Tissue, MUT_TYPE) %>%
+  group_by(MouseID, AGE_BIN, Tissue, MUT_TYPE) %>%
+  summarise(COUNT = n())
+```
+
+```{r}
+sc_de_novo_muts %>%
+  ungroup() %>%
+  select(MouseID, Tissue) %>%
+  unique() %>%
+  mutate(LABEL = paste(MouseID, Tissue, sep = "_"))
+
+```
+
+We need to create a dummy df for mutation types that had a 0 mutation frequency 
+
+```{r}
+
+sample_names = rep(((sc_de_novo_muts %>%
+  ungroup() %>%
+  select(MouseID, Tissue, AGE_BIN) %>%
+  unique() %>%
+  mutate(LABEL = paste(MouseID, Tissue, AGE_BIN, sep = "_")))$LABEL), each = 12)
+
+mut_types = rep(((sc_de_novo_muts %>%
+  ungroup() %>%
+  select(MUT_TYPE) %>%
+  unique())$MUT_TYPE), 88)
+
+dummy_df = cbind(data.frame(sample_names), data.frame(mut_types)) %>%
+  separate(sample_names, sep = "_", into = c("MouseID", "Tissue", "AGE_BIN"))
+
+colnames(dummy_df) = c("MouseID", "Tissue", "AGE_BIN", "MUT_TYPE")
+
+```
+
+Now to merge our dummy df and our de novo counts 
+
+```{r}
+
+sc_mut_freqs = sc_de_novo_muts %>%
+  ungroup() %>%
+  full_join(dummy_df, by = c("MouseID", "Tissue", "AGE_BIN", "MUT_TYPE")) %>%
+  mutate(COUNT = ifelse(is.na(COUNT), 0, COUNT)) %>%
+  separate(MUT_TYPE, sep = ">", into = c("REF", "ALT"), remove = FALSE) %>%
+  select(MouseID, AGE_BIN, Tissue, MUT_TYPE, REF, COUNT) %>%
+  left_join(sc_duplex_ref, by = c("MouseID", "AGE_BIN", "Tissue", "REF")) %>%
+  mutate(MUT_FREQ = COUNT/DP_BP)
+
+```
+
+Now to create our summary df 
+
+```{r}
+
+sc_summary_df = sc_mut_freqs %>%
+  ungroup() %>%
+  select(Tissue, AGE_BIN, MUT_TYPE, MUT_FREQ) %>%
+  group_by(Tissue, AGE_BIN, MUT_TYPE) %>%
+  summarise(AVG = mean(MUT_FREQ), SAMP_COUNT = n(), SE = sd(MUT_FREQ)/sqrt(SAMP_COUNT))
+
+sc_summary_df$MUT_TYPE = factor(sc_summary_df$MUT_TYPE, level = c("G>A","C>T", "G>C", "C>G", "G>T", "C>A", "T>A", "A>T", "T>C", "A>G", "T>G", "A>C"))
+sc_summary_df$AGE_BIN = factor(sc_summary_df$AGE_BIN, level = c("YOUNG", "OLD"))
+```
+
+Plotting our mut freqs!
+
+```{r}
+
+summary_sc_plot = ggplot(sc_summary_df, aes(x = MUT_TYPE, y = AVG, fill = Tissue)) 
+
+summary_sc_plot = summary_sc_plot + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_errorbar(aes(ymin=AVG-SE, ymax=AVG+SE), width=.2,
+                 position=position_dodge(.9)) +
+  facet_wrap(. ~ AGE_BIN, nrow = 2) + 
+  ylab("Mutation frequency") + 
+  xlab("Mutation Type") + 
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90), 
+        legend.position = "bottom")
+
+pdf(paste(outdir_figures,"/sc_frequencies_strand_bias.pdf",sep=""),width=6,height=4 )
+print(summary_sc_plot)
+dev.off()
+  
+```
+
+Exporting our mutation frequencies 
+```{r}
+outdir_files ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/"  
+
+#exporting our strand bias fishers exact test 
+write.table(sc_mut_freqs, file = paste(outdir_files,"/sc_de_novo_mut_freqs.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+#exporting our strand bias fishers exact test 
+write.table(sc_summary_df, file = paste(outdir_files,"/sc_summary_de_novo_mut_freqs.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+Running a t-test analysis for strand bias
+
+Now we want to statistically test if there's a difference between the complementary average mutation frequencies for each condition
+
+```{r}
+t_sc_df = sc_mut_freqs %>%
+  mutate(COND_LABEL = paste(Tissue, AGE_BIN, sep = "_"))
+```
+
+The list of mutation pairs and cond_labels we will iterate through
+```{r}
+MUT_PAIRS = c("G>A_C>T","G>C_C>G", "G>T_C>A",
+              "A>C_T>G", "A>G_T>C", "A>T_T>A")
+
+
+COND_LABEL = (t_sc_df %>%
+  select(COND_LABEL) %>%
+  unique())$COND_LABEL
+
+```
+
+```{r}
+#initialize our t-test results df 
+t_output = data.frame(CONDITION = character(),
+                      MUT_PAIR = character(),
+                      P_VAL = numeric(),
+                      T_STAT = numeric()
+)
+
+#loop through each condition in one loop via the LABEL field 
+for(label in COND_LABEL){
+  #subset our mutation freq df for just this label 
+  print(label)
+  
+  cond_subset_df = t_sc_df %>%
+    filter(COND_LABEL == label)
+  
+  #loop through this subset for our specific mutation pairs that we can find via the PAIRS field
+  for(pair in MUT_PAIRS){
+    #break down the pair label based on the delim 
+    #assign the mutation and compliment to the variables 
+    #print variables 
+    print(pair) 
+    split = str_split(pair, "_")
+
+    #sigh totally breaking an abstraction here
+    mut = split[[1]][1]
+    comp_mut = split[[1]][2]
+    
+    print(mut)
+    print(comp_mut)
+    
+    #subset a df that has these mutation types 
+    t_test_df = cond_subset_df %>%
+      filter(MUT_TYPE == mut | MUT_TYPE == comp_mut)
+    
+    #run the t-test on this subset df
+    t_test_results = t.test(MUT_FREQ~MUT_TYPE,data=t_test_df)
+    
+    pval = t_test_results$p.value
+    stat = t_test_results$statistic
+    
+    #save the condition label, the mutation pair label, p-value, and statistic
+    output_results = c(label, pair, pval, stat)
+    
+    
+    #save results onto new row of the output table 
+    t_output[nrow(t_output) + 1,] = output_results
+  }
+}
+
+
+```
+Multiple hypothesis correcting 
+
+```{r}
+corrected_t_output = t_output %>%
+  mutate(P_ADJ = p.adjust(P_VAL, method="BH"))
+
+```
+
+```{r}
+
+corrected_t_output %>%
+  filter(P_ADJ < 0.01) 
+
+```
+
+We are running the strand bias analysis with a Fisher's Exact test, since our power comes from the mutation counts in this statistical test and we test for dependence between mut type and strand
+
+```{r}
+
+cond_sc_mut_count = sc_mut_freqs %>%
+  select(Tissue, AGE_BIN, MUT_TYPE, COUNT) %>%
+  group_by(Tissue, AGE_BIN, MUT_TYPE) %>%
+  summarise(COND_MUT_COUNT = sum(COUNT)) %>%
+  mutate(COND_LABEL = paste(Tissue, AGE_BIN, sep = "_"))
+
+```
+
+We need the duplex depth for the Fisher's Exact 
+
+```{r}
+sc_cond_duplex_depth = sc_duplex_ref %>%
+  select(Tissue, AGE_BIN, REF, DP_BP) %>%
+  mutate(COND_LABEL = paste(Tissue, AGE_BIN, sep = "_")) %>%
+  select(COND_LABEL, REF, DP_BP) %>%
+  group_by(COND_LABEL, REF) %>%
+  summarise(DP_SUM = sum(DP_BP))
+
+
+```
+
+Exporting these two files for the study comparison analysis
+
+```{r}
+
+outdir_files ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/files/"  
+
+#exporting our strand bias fishers exact test 
+write.table(cond_sc_mut_count, file = paste(outdir_files,"/sc_cond_mut_counts.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+write.table(sc_cond_duplex_depth, file = paste(outdir_files,"/sc_cond_ref_bases.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+Now creating a for loop for our fishers exact test
+
+```{r}
+#initializing our df 
+fe_output = data.frame(COND_LABEL = character(),
+                    MUT_PAIR = character(),
+                    P_VAL = numeric(),
+                    OR = numeric()) 
+
+#looping through our mutation pairs 
+for(pair in MUT_PAIRS){
+    #break down the pair label based on the delim 
+    #assign the mutation and compliment to the variables 
+    #print variables 
+    print(pair) 
+    split = str_split(pair, "_")
+
+    #sigh totally breaking an abstraction here
+    mut = split[[1]][1]
+    comp_mut = split[[1]][2]
+  
+    #split the ref based on the mut 
+    mut_ref = str_split(mut, ">")[[1]][1]
+    comp_ref = str_split(comp_mut, ">")[[1]][1]
+    
+    #filter data based on mut and comp mut
+    mut_pair_subset_df = cond_sc_mut_count %>%
+      filter(MUT_TYPE == mut | MUT_TYPE == comp_mut)
+    
+    #now loop through each cond_label 
+    for(label in COND_LABEL){
+      #filter the duplex_bp data based on the cond_label 
+      duplex_bp_subset = sc_cond_duplex_depth %>%
+        filter(COND_LABEL == label)
+      
+    #subset df for this label 
+      
+      contigency_df_inputs = mut_pair_subset_df %>%
+        filter(COND_LABEL == label)
+      
+      #grab items for this condition fe contigency table 
+      mut_counts = contigency_df_inputs[contigency_df_inputs$MUT_TYPE == mut,]$COND_MUT_COUNT
+      comp_mut_counts = contigency_df_inputs[contigency_df_inputs$MUT_TYPE == comp_mut,]$COND_MUT_COUNT
+      
+      mut_ref_counts = duplex_bp_subset[duplex_bp_subset$REF == mut_ref,]$DP_SUM
+      comp_ref_counts = duplex_bp_subset[duplex_bp_subset$REF == comp_ref,]$DP_SUM
+      
+      #create contigency table
+      con_tbl = matrix(c(mut_counts, mut_ref_counts - mut_counts, comp_mut_counts, comp_ref_counts - comp_mut_counts), ncol = 2, byrow = F)
+      
+      #running fisher's exact on the df 
+      fishers_results = fisher.test(con_tbl, alternative = "two.sided")
+
+      pval = fishers_results$p.value[1]
+      OR = fishers_results$estimate
+
+      #appending to our df 
+      results = c(label, pair, pval, OR)
+  
+      fe_output[nrow(fe_output) + 1,] = results
+    
+}}
+
+```
+
+```{r}
+
+corrected_fe_output = fe_output %>%
+  mutate(P_ADJ = p.adjust(P_VAL, method="BH"))
+  
+
+```
+
+```{r}
+corrected_fe_output %>%
+  filter(P_ADJ < 0.01)
+
+```

@@ -1,0 +1,159 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+outdir_files =  "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/files/"
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/figures/"
+
+sig_hits_file = "files/sig_hnhs_ratios.txt" 
+sig_hits = read.table(sig_hits_file, sep = "\t")
+  
+all_p_vals_file = "files/pvals_all_hnhs_ratios.txt"
+all_p_vals = read.table(all_p_vals_file, sep = "\t")
+
+```
+
+```{r}
+
+norm_by_count = all_p_vals %>%
+  select(AGE_BIN, BIN) %>%
+  group_by(AGE_BIN, BIN) %>%
+  summarise(TOTAL_COUNT = n())
+
+```
+
+```{r}
+
+sig_counts = sig_hits %>%
+  select(AGE_BIN, BIN) %>%
+  group_by(AGE_BIN, BIN) %>%
+  summarise(SIG_COUNT = n())
+
+```
+
+```{r}
+
+sig_perc = norm_by_count %>%
+  left_join(sig_counts, by = c("AGE_BIN", "BIN")) %>%
+  mutate(SIG_COUNT = ifelse(is.na(SIG_COUNT), 0, SIG_COUNT)) %>%
+  mutate(SIG_PERC = SIG_COUNT/TOTAL_COUNT)
+
+sig_perc$AGE_BIN = factor(sig_perc$AGE_BIN, levels = c("YOUNG", "OLD"))
+sig_perc$BIN = factor(sig_perc$BIN, levels = rev(c("upper-1", "upper-1e-2", "upper-1e-3", "upper-1e-4", "upper-7e-5", "upper-5e-5", "upper-1e-5", "upper-5e-6")))
+
+```
+
+Plotting the distribution of significant hits per strain 
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+sig_hit_dist_by_bin = ggplot(sig_perc, aes(x = BIN, y = SIG_PERC))
+
+sig_hit_dist_by_bin = sig_hit_dist_by_bin + 
+  geom_bar(stat = "identity") + 
+  facet_wrap(.~AGE_BIN, nrow = 2) + 
+  xlab("Bin") + 
+  ylab("Proportion of sig hits\n [# of sig hits/total # hits per bin]") + 
+  theme_bw() + 
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 90))
+
+pdf(paste(outdir_figures, "sig_hits_dist_by_bin.pdf", sep=""),width=2,height=3)
+print(sig_hit_dist_by_bin)
+dev.off()
+
+```
+
+
+We want to look at the dist of ratios in bins by type of selection that's occurring 
+
+```{r}
+
+sel_sig_count = sig_hits %>%
+  select(AGE_BIN, BIN, OBS_RATIO) %>%
+  mutate(SEL = ifelse(OBS_RATIO < 1, "N", "P")) %>%
+  select(AGE_BIN, BIN, SEL) %>%
+  group_by(AGE_BIN, BIN, SEL) %>%
+  summarise(SIG_COUNT = n())
+
+```
+
+```{r}
+
+sel_sig_perc = norm_by_count %>%
+  left_join(sel_sig_count, by = c("AGE_BIN", "BIN")) %>%
+  mutate(SIG_COUNT = ifelse(is.na(SIG_COUNT), 0, SIG_COUNT)) %>%
+  mutate(SIG_PERC = SIG_COUNT/TOTAL_COUNT) %>%
+  filter(SIG_COUNT != 0)
+
+sel_sig_perc$AGE_BIN = factor(sel_sig_perc$AGE_BIN, levels = c("YOUNG", "OLD"))
+sel_sig_perc$BIN = factor(sel_sig_perc$BIN, levels = rev(c("upper-1", "upper-1e-2", "upper-1e-3", "upper-1e-4", "upper-7e-5", "upper-5e-5", "upper-1e-5", "upper-5e-6")))
+
+```
+
+Plotting the dist of ratios per bin and selection strat 
+
+```{r}
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+sig_hit_dist_by_bin_sel = ggplot(sel_sig_perc, aes(x = BIN, y = SIG_PERC, fill = SEL))
+
+sig_hit_dist_by_bin_sel = sig_hit_dist_by_bin_sel + 
+  geom_bar(position = position_dodge(), stat = "identity") + 
+  facet_wrap(.~AGE_BIN, nrow = 2) + 
+  xlab("Bin") + 
+  ylab("Proportion of sig hits\n [# of sig hits/total # hits per bin]") + 
+  theme_bw() + 
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 90))
+
+pdf(paste(outdir_figures,"sig_hit_dist_by_bin_strat_sel.pdf", sep=""),width=3,height=3)
+print(sig_hit_dist_by_bin_sel)
+dev.off()
+
+```
+
+```{r}
+
+sig_genes = sig_hits %>%
+  select(BIN, GENE, OBS_RATIO) %>%
+  mutate(SEL=ifelse(OBS_RATIO < 1, "N", "P")) %>%
+  group_by(BIN, GENE, SEL) %>%
+  summarise(COUNT = n())
+
+sig_genes$BIN = factor(sig_genes$BIN, levels = rev(c("upper-1", "upper-1e-2", "upper-1e-3", "upper-1e-4", "upper-7e-5", "upper-5e-5", "upper-1e-5", "upper-5e-6")))
+sig_genes$GENE = factor(sig_genes$GENE, levels = c("mt-Nd1", "mt-Nd2", "mt-Nd3", "mt-Nd4", "mt-Nd4l","mt-Nd5", "mt-Nd6", "mt-Cytb", "mt-Co1", "mt-Co2", "mt-Co3", "mt-Atp6", "mt-Atp8"))
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+gene_bin_sel = ggplot(sig_genes, aes(x = GENE, y = COUNT, fill = SEL))
+
+gene_bin_sel = gene_bin_sel + 
+  geom_bar(position = position_dodge(), stat = "identity") + 
+  facet_wrap(.~BIN, nrow = 6) + 
+  xlab("Bin") + 
+  ylab("Proportion of sig hits\n [# of sig hits/total # hits per bin]") + 
+  theme_bw() + 
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 90))
+
+pdf(paste(outdir_figures,"sig_genes_by_bin_dist.pdf", sep=""),width=5,height=5.75)
+print(gene_bin_sel)
+dev.off()
+
+```

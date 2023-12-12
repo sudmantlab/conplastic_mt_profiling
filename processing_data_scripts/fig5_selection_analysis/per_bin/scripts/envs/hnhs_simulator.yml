@@ -1,0 +1,11 @@
+name: hnhs_simulator
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies: 
+  - python >= 3.5
+  - pandas=1.3.3
+  - numpy=1.21.2
+  - biopython=1.81
+prefix: /global/scratch/users/isabel_serrano/software/mambaforge/envs/hnhs_simulator

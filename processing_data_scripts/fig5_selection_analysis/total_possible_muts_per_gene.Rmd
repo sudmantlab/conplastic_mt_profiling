@@ -1,0 +1,82 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+outdir_files =  "files/"
+outdir_figures = "figures/"
+
+#will contain information about the read depth for a gene (# of mt-genomes we sequence)
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+#will contain information about which mutations will result in a syn or nsyn annotation 
+all_possible_muts_annotation_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/annotating_variants/output/annotated_all_possible_variants.txt"
+all_possible_muts_annotation = read.table(all_possible_muts_annotation_file, header=TRUE, stringsAsFactors = FALSE)
+```
+
+To calculate the denominator of our hN/hS ratio we want to calculate how many possible sites produce a missense and how many produce a syn mutation within a gene
+```{r}
+#the calculation of all possible sites for one mt-genome
+possible_sites = all_possible_muts_annotation %>%
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN)) %>% 
+  #filter our any annotations that are not in gene coding regions 
+  filter(ANNOTATION != "non_coding_transcript_exon_variant") %>% 
+  select(STRAIN, ANNOTATION, GENE) %>% 
+  group_by(STRAIN, GENE, ANNOTATION) %>% 
+  #each row is a different possible mutation at a position within the gene
+  summarise(SITE_COUNT = n()/3) %>% 
+  pivot_wider(names_from = ANNOTATION, values_from = SITE_COUNT) %>% 
+  rename("NONSYN_SITE_COUNT" = "missense_variant", "SYN_SITE_COUNT" = "synonymous_variant")
+
+```
+
+
+```{r}
+#but we have data for X number of mt-genomes so we need an estimate of the number of sites we have across mt-genomes
+#we calculate the average read depth per gene 
+
+average_read_depth = supertable %>% 
+  #to filter out tRNAs
+  filter(!grepl("mt-T", GENE)) %>% 
+  filter(GENE != "mt-OL", GENE != "intergene_region") %>% 
+   #we want to keep no mutation present since we have read depth info at these positions -- but this means that we may keep tRNAs or the OriL -- which is why we placed the filters above
+  filter(ANNOTATION != "non_coding_transcript_exon_variant" & ANNOTATION != "INDEL") %>%
+  select(STRAIN, TISSUE, AGE_BIN, START, GENE, READ_DEPTH_AT_POS) %>% 
+  unique() %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE, START) %>% 
+  summarise(COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>% 
+  ungroup() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, GENE, COND_READ_DEPTH_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, GENE) %>% 
+  summarise(AVG_READ_DEPTH_PER_GENE = mean(COND_READ_DEPTH_AT_POS))
+
+```
+
+
+Merging our information so that we calculate total possible sites
+
+```{r}
+total_num_sites = average_read_depth %>% 
+  left_join(possible_sites, by = c("STRAIN", "GENE")) %>% 
+  mutate(TOTAL_NONSYN_SITE_COUNT = AVG_READ_DEPTH_PER_GENE*NONSYN_SITE_COUNT, TOTAL_SYN_SITE_COUNT = AVG_READ_DEPTH_PER_GENE*SYN_SITE_COUNT)
+
+rm(possible_sites, average_read_depth)
+
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+write.table(total_num_sites, file = paste(outdir_files,"/total_annotated_num_sites_per_gene.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+```
+
+

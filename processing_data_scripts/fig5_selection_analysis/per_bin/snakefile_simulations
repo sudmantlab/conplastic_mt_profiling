@@ -1,0 +1,54 @@
+#we point our configfile to a specific file in our directory (which is in reality a dictionary)
+configfile: "config.json"
+
+#this function creates the output/indiv_sims file names for all conditions, allowing us to create wildcards from our output file names for our simulator rule
+#we obtain the lists AGES,TISSUES,STRAINS, and BINS from our config file
+
+def get_inputs(wildcards):
+	
+	all_file_names = []
+	excluded_files = config["EXCLUDE"]
+
+	for age in config["AGES"]:
+		for tissue in config["TISSUES"]:
+			for strain in config["STRAINS"]:
+				#if our condition is B6, YOUNG, Liver, we do not want to create those files since we do not
+				#have data for this condition
+				if age == "YOUNG" and tissue == "Liver" and strain == "B6":
+					continue
+				for bin in config["BINS"]:
+					all_file_names.append("output/indiv_sims/{s}_{t}_{a}_{b}_annotated_simulations_counts_per_gene.txt".format(s=strain, t=tissue, a=age, b=bin))
+
+	inputs = [entry for entry in all_file_names if entry not in excluded_files] 
+
+	return inputs
+
+#the final output of our snakemake workflow is a file that contains all simulated missense and synonymous mutation counts per gene 
+rule all:
+	input:
+		"output/final/combined_simulations_counts_per_gene.txt"
+
+#run a shell command that combines individual simulation counts per gene into one file 
+#we use as input our get_inputs function which returns a list of all the output files from our simulator rule
+rule combine_indiv_sim_files:
+	input: get_inputs
+	output: "output/final/combined_simulations_counts_per_gene.txt"
+	shell:
+		"bash scripts/merging_sims.sh"
+
+#run the simulator for each strainxtissuexagexbin_freq combination
+rule simulator:
+	input:
+		fasta = "input/chrM_wo_dloop.fa",
+		haplo = "input/haplotype_mutations.vcf",
+		annotations = "input/annotated_all_possible_variants.txt",
+		total_mut_count = "input/total_mut_counts_all_bins_wo_dloop.txt",
+		mut_prop = "input/mut_type_props_all_bins_wo_dloop.txt"
+	output:
+		"output/indiv_sims/{strain}_{tissue}_{age}_{bin_freq}_annotated_simulations_counts_per_gene.txt"
+	conda:
+		"scripts/envs/hnhs_simulator.yml"
+	log:
+		"logs/simulator/{strain}_{tissue}_{age}_{bin_freq}.log"
+	shell:
+		"python scripts/hNhS_simulator_v3.py -strain {wildcards.strain} -tissue {wildcards.tissue} -age {wildcards.age} -bin_freq {wildcards.bin_freq} -sim_num 10000 -fasta_file_path {input.fasta} -mut_count_file_path {input.total_mut_count} -mut_prop_file_path {input.mut_prop} -haplotype_file_path {input.haplo} -annotated_variants_file_path {input.annotations}"	

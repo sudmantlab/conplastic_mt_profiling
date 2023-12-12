@@ -1,0 +1,179 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+```
+
+```{r}
+coordinates_file = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/Mouse_Mt_Genome_Coordinates"
+
+sc_supertable_file = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/sc2023_mouse_aging/files/sc2023_mouse_aging_supertable.txt"
+
+#note specifying the delimeter eliminates the rows with ## or # in the entry -- the headers that were not filtered out because these 3 files had 2 more header lines than the other files 
+sc_supertable = read.table(sc_supertable_file, sep = '\t', header = TRUE)
+
+coordinates = read.table(coordinates_file, header = FALSE, stringsAsFactors = FALSE, sep = "\t")
+
+outdir_figures = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/sc2023_mouse_aging/figures"
+outdir_files = "~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/sc2023_mouse_aging/files"
+```
+
+Note: Sanchez-Contreras mask the following regions:
+OriL, ND2 (where we see our two hotspots)
+Cox2, ND4, ND5, ND6, and D-Loop
+
+Filtering for our untreated samples:
+```{r}
+NT_mice = sc_supertable %>%
+  filter(grepl("NT", Treatment)) 
+
+```
+
+```{r}
+rm(sc_supertable)
+```
+
+Aggregating our counts across samples in a condition: 
+```{r}
+NT_mice_per_condition = NT_mice %>%
+  select(MouseID, Tissue, Age, POS, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  group_by(MouseID, Tissue, Age, POS, READ_DEPTH_AT_POS) %>% 
+  #aggregating the alt allele depth at a position for a sample 
+  summarise(SAMPLE_ALT_ALLELE_COUNT_AT_POS = sum(ALT_ALLELE_DEPTH)) %>%
+  ungroup() %>%
+  select(Tissue, Age, POS, SAMPLE_ALT_ALLELE_COUNT_AT_POS, READ_DEPTH_AT_POS) %>%
+  group_by(Tissue, Age, POS) %>%
+  summarise(COND_MUT_COUNT = sum(SAMPLE_ALT_ALLELE_COUNT_AT_POS), COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>%
+  mutate(MUT_FREQ = COND_MUT_COUNT/COND_READ_DEPTH_AT_POS) %>% 
+  mutate(AGE_BIN = ifelse(Age > 20, "Old", "Young"))
+
+NT_mice_per_condition$Tissue = factor(NT_mice_per_condition$Tissue, level = c("K", "L", "EC", "R", "Hi", "C", "M", "He"))
+NT_mice_per_condition$AGE_BIN = factor(NT_mice_per_condition$AGE_BIN, level = c("Young", "Old"))
+```
+
+Looking at the coverage across conditions
+
+```{r}
+
+coverage_across_mt_genome = ggplot(NT_mice_per_condition) 
+
+coverage_across_mt_genome = coverage_across_mt_genome + 
+  #OriL
+  geom_rect(xmin = 5159 , xmax = 5190, ymin = -Inf, ymax = Inf, color = "gray", alpha = 0.5) + 
+  #region surrounding the repeat in ND2
+  geom_rect(xmin = 4030 , xmax = 4070, ymin = -Inf, ymax = Inf, color = "gray", alpha = 0.5) + 
+  #the tRNA Tr (Arginine)
+  geom_rect(xmin = 9807 , xmax = 9874, ymin = -Inf, ymax =  Inf, color = "gray", alpha = 0.5) +
+  geom_line(aes(x=POS, y= COND_READ_DEPTH_AT_POS, color= AGE_BIN), size= 0.3, alpha = 0.7) +
+  xlab("Position (bp)") + 
+  ylab("DP Depth") + 
+  facet_wrap(Tissue~., nrow = 2) + 
+  theme_bw() + 
+  guides(color = guide_legend(override.aes = list(size = 5))) +
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 45, size = 10, hjust = 1, vjust = 1),
+        axis.text.y = element_text(size = 10),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.position = "none")
+
+png(paste(outdir_figures,"/dp_depth_across_genome.png",sep=""),width=6,height=3.5,unit='in',res=800)
+print(coverage_across_mt_genome)
+dev.off()
+
+png(paste(outdir_figures,"/leg_dp_depth_across_genome.png",sep=""),width=6,height=3.5,unit='in',res=800)
+print(coverage_across_mt_genome + theme(legend.position = "bottom"))
+dev.off()
+
+```
+
+Normalizing for sequencing depth across all conditions
+```{r}
+norm_NT_mut_freq = NT_mice_per_condition %>%
+  ungroup() %>% 
+  group_by(POS) %>%
+  #we find the minimum sequencing depth at all positions 
+  mutate(MIN_READ_DEPTH_AT_POS = min(COND_READ_DEPTH_AT_POS)) %>% 
+  #we set the smallest freq we can detect as 1/smallest read depth
+  mutate(MIN_FREQ = 1/MIN_READ_DEPTH_AT_POS) %>%
+  #now we normalize our mutation counts to 0 if we would be unable to capture the mutation 
+  mutate(NORM_MUT_COUNT_AT_POS = ifelse(MUT_FREQ < MIN_FREQ, 0, COND_MUT_COUNT)) %>%
+  mutate(NORM_MUT_FREQ = NORM_MUT_COUNT_AT_POS/COND_READ_DEPTH_AT_POS) 
+```
+
+Calculating the average mutation frequency in 150 bp windows 
+```{r}
+
+mut_freq_sliding_window_avg = norm_NT_mut_freq %>%
+  select(Tissue, AGE_BIN, POS, COND_MUT_COUNT, COND_READ_DEPTH_AT_POS, MUT_FREQ, NORM_MUT_FREQ) %>%
+  #filter out high frequency positions as we did in our analysis 
+  filter(MUT_FREQ < 1e-3) %>%
+  ungroup() %>%
+  group_by(Tissue, AGE_BIN) %>% 
+  mutate(WINDOW_MUT_AVG = RcppRoll::roll_mean(NORM_MUT_FREQ,150,fill=NA)) %>%
+  select(Tissue, AGE_BIN, POS, NORM_MUT_FREQ, WINDOW_MUT_AVG) 
+
+#refactoring to order tissues based on overall de novo mutation frequency (highest to lowest)
+mut_freq_sliding_window_avg$Tissue = factor(mut_freq_sliding_window_avg$Tissue, level = c("K", "L", "EC", "R", "Hi", "C", "M", "He"))
+mut_freq_sliding_window_avg$AGE_BIN = factor(mut_freq_sliding_window_avg$AGE_BIN, level = c("Young", "Old"))
+```
+
+Plotting 
+
+```{r}
+young_mutation_freq_windows_plot = ggplot(mut_freq_sliding_window_avg %>% filter(AGE_BIN == "Young")) 
+
+young_mutation_freq_windows_plot = young_mutation_freq_windows_plot + 
+  #OriL
+   geom_rect(xmin = 5159 , xmax = 5190, ymin = -Inf, ymax = Inf, color = "gray", alpha = 0.5) + 
+  #region surrounding the repeat in ND2
+  geom_rect(xmin = 4030 , xmax = 4070, ymin = -Inf, ymax = Inf, color = "gray", alpha = 0.5) + 
+  #the tRNA Tr (Arginine)
+  geom_rect(xmin = 9807 , xmax = 9874, ymin = -Inf, ymax =  Inf, color = "gray", alpha = 0.5) +
+  geom_line(aes(x=POS, y= WINDOW_MUT_AVG), color = "#F8766D", size= 0.3, alpha = 0.8) +
+  theme_bw() +
+  ylab("Average Mut Freq (150 bp)") + 
+  xlab("Position on the mt-genome (bp)") + 
+  facet_wrap(Tissue~., nrow = 2) + 
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 45, size = 10, hjust = 1, vjust = 1),
+        axis.text.y = element_text(size = 10),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.position = "none")
+
+png(paste(outdir_figures,"/young_hotspots_across_genome.png",sep=""),width=6,height=3.5, unit='in',res=800 )
+print(young_mutation_freq_windows_plot)
+dev.off()
+```
+
+```{r}
+old_mutation_freq_windows_plot = ggplot(mut_freq_sliding_window_avg %>% filter(AGE_BIN == "Old")) 
+
+old_mutation_freq_windows_plot = old_mutation_freq_windows_plot + 
+  geom_rect(xmin = 5159 , xmax = 5190, ymin = -Inf, ymax = Inf, color = "gray", alpha = 0.5) + 
+  #region surrounding the repeat in ND2
+  geom_rect(xmin = 4030 , xmax = 4070, ymin = -Inf, ymax = Inf, color = "gray", alpha = 0.5) + 
+  #the tRNA Tr (Arginine)
+  geom_rect(xmin = 9807 , xmax = 9874, ymin = -Inf, ymax =  Inf, color = "gray", alpha = 0.5) +
+  geom_line(aes(x=POS, y= WINDOW_MUT_AVG), color= "#00BFC4", size= 0.3, alpha = 0.8) +
+  theme_bw() +
+  ylab("Average Mut Freq (150 bp)") + 
+  xlab("Position on the mt-genome (bp)") + 
+  facet_wrap(Tissue~., nrow = 2) + 
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 45, size = 10, hjust = 1, vjust = 1),
+        axis.text.y = element_text(size = 10),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        legend.position = "none")
+
+png(paste(outdir_figures,"/old_hotspots_across_genome.png",sep=""),width=6,height=3.5, unit='in',res=800  )
+print(old_mutation_freq_windows_plot)
+dev.off()
+```
+

@@ -1,0 +1,30 @@
+rule all:
+	input:
+		"output/final/mut_freq_per_type.csv",
+		"output/final/adjusted_mut_freq_for_haplotypes.csv",
+		"output/intermediate/overall_mut_freq_w_haplotypes.csv"
+
+rule merge_mut_freq_files:
+	input:
+		path = "dcs_mut_freq_files"
+	output:
+		"output/intermediate/all_mut_freqs.csv"
+	shell:
+		"bash processing_scripts/merge_mutation_freqs.sh {input.path} AKR_O1_Brain.dcs.countmuts.csv all_mut_freqs.csv ../output/intermediate"
+
+rule format_and_parse:
+	input:
+		"output/intermediate/all_mut_freqs.csv"
+	output:
+		"output/final/mut_freq_per_type.csv",
+		"output/intermediate/overall_mut_freq_w_haplotypes.csv"
+	script:
+		"processing_scripts/format_and_parse_mutfreq.py"
+
+rule adjust_mut_freq_for_haplotypes:
+	input: 
+		"output/intermediate/overall_mut_freq_w_haplotypes.csv"
+	output: 
+		"output/final/adjusted_mut_freq_for_haplotypes.csv"
+	script:
+		"processing_scripts/adjusting_mutfreq.py"	

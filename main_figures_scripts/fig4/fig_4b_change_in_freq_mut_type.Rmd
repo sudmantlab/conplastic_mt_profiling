@@ -1,0 +1,449 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Change in mutation frequency with age per mutation type -- HFPs are not included in this analysis
+ 
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(broom)
+library(ggsignif)
+library(PNWColors)
+```
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/")
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/change_in_mut_freq/figures/"
+outdir_files =  "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/change_in_mut_freq/files"
+
+mut_freq_per_type_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/mut_freq_per_type.csv"
+mut_freq_per_type = read.table(mut_freq_per_type_file, header=TRUE, stringsAsFactors = FALSE)
+
+supertable_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/supertable.txt"
+supertable = read.table(supertable_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+Denominator for our average mutation frequencies -- also helps normalize for sequencing depth
+
+We:
+1) Filter out the mid point in B6
+2) Filter the df so that it's all A,C,G,T ref bases and the total duplex depth, which is used as the denominator for indels
+3) Recode mutation types so that we group complimentary mutation types and then sum the duplex depth (i.e. A+T and C+G ref base depth are summed). The totals across samples are summed together. 
+4) Relabel Total to Indel mutation for merging purposes 
+
+```{r}
+#MUTATION_TYPE: The exact mutation type (i.e. G>A, C>T, etc)
+#MUTATION_CLASS: SNV, INS, or DEL
+#DENOMINATOR: Duplex depth for that ref base
+
+#we don't unique because each sample has their own duplex depth to contribute 
+ref_base_seq_depth = mut_freq_per_type %>%
+  #filter out samples not included in the analysis
+  filter(AGE_BIN != "MID") %>%
+  filter(!grepl("B6_Y3_Heart", SAMPLE)) %>%
+  filter(!grepl("B6_Y._Liver", SAMPLE)) %>% 
+  filter(MUTATION_CLASS == "SNV") %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, MUTATION_CLASS, DENOMINATOR)
+
+#consolidating complimentary mutation types
+#sum the depth across complimentary ref bases
+ref_base_seq_depth = ref_base_seq_depth %>% 
+  mutate(MUTATION = recode(ref_base_seq_depth$MUTATION_TYPE, "A>T" = "T>A",
+                  "A>C" = "T>G",
+                  "A>G" = "T>C",
+                  "C>A" = "G>T",
+                  "C>G" = "G>C",
+                  "C>T" = "G>A")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION, DENOMINATOR) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, MUTATION) %>%
+  summarise(REF_BASE_DEPTH = sum(DENOMINATOR)) %>%
+  mutate(MUTATION = ifelse(MUTATION == "Total", "INDEL", MUTATION)) %>%
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN))
+  
+```
+
+Now, we want to calculate the mutation type count per condition. For this analysis, we remove the high frequency positions: 
+
+So we, 
+1) Created the mutation type based on the ref and alt alleles
+2) Recoded the SNV mutation types to consolidate complimentary mutation types 
+3) Relabeled mutations as INS and DEL in the mutation categories for grouping and merging purposes 
+4) Group by strain, tissue, age bin, and mutation type to count how many of each mutation type there is in a condition
+5) The last mutate is 100% for merging purposes so that we can get the indel denominator for both INS and DEL 
+
+```{r}
+#MUTATION_TYPE: The exact mutation type (i.e. G>A, C>T, etc)
+#VARIANT_TYPE: SNV or INDEL
+mutation_type_counts = supertable %>%
+  #we unique to remove any redundancy due to positions being in multiple gene regions 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, REF, ALT, VARIANT_TYPE, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS, CONDITION_MUT_FREQ_AT_POS, HFP_THRESHOLD) %>%
+  unique() %>% 
+  #filter out the HFP positions from our data 
+  filter(CONDITION_MUT_FREQ_AT_POS < HFP_THRESHOLD) %>% 
+  filter(VARIANT_TYPE != "no_mutation") %>%
+  select(STRAIN, TISSUE, AGE_BIN, REF, ALT, VARIANT_TYPE, ALT_ALLELE_DEPTH) %>% 
+  mutate(MUTATION_TYPE = paste(REF, ALT, sep = ">")) %>% 
+  select(STRAIN, TISSUE, AGE_BIN, VARIANT_TYPE, MUTATION_TYPE, ALT_ALLELE_DEPTH) 
+
+#consolidating complimentary mutation types
+#we also recode the MUTATION_TYPE to be either INS or DEL rather than the specific mutation 
+#we then create a new column MUTATION (same name as in our ref_base_depth df) that has the exact point mutations and indel for merging information
+mutation_type_counts = mutation_type_counts %>%
+  mutate(MUTATION_TYPE = recode(mutation_type_counts$MUTATION_TYPE, "A>T" = "T>A",
+                  "A>C" = "T>G",
+                  "A>G" = "T>C",
+                  "C>A" = "G>T",
+                  "C>G" = "G>C",
+                  "C>T" = "G>A")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, VARIANT_TYPE, MUTATION_TYPE, ALT_ALLELE_DEPTH) %>%
+  mutate(MUTATION_TYPE = ifelse(VARIANT_TYPE == "DEL", "DEL", MUTATION_TYPE)) %>%
+  mutate(MUTATION_TYPE = ifelse(VARIANT_TYPE == "INS", "INS", MUTATION_TYPE)) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, ALT_ALLELE_DEPTH) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE) %>%
+  #calculating the alt allele count across samples and the redundant mutation types 
+  summarise(MUT_COUNT = sum(ALT_ALLELE_DEPTH)) %>% 
+  mutate(MUTATION = ifelse(MUTATION_TYPE == "INS"| MUTATION_TYPE == "DEL", "INDEL", MUTATION_TYPE))
+
+```
+
+Merge our ref base and mutation counts tables to calculate frequencies and proportions 
+
+```{r}
+summary_df = mutation_type_counts %>%
+  left_join(ref_base_seq_depth, by = c("STRAIN", "TISSUE", "AGE_BIN", "MUTATION")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, MUT_COUNT, REF_BASE_DEPTH) %>%
+  ungroup() %>%
+  mutate(FREQ = MUT_COUNT/REF_BASE_DEPTH) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN) %>% 
+  mutate(TOTAL_MUT_COUNT_IN_COND = sum(MUT_COUNT)) %>%
+  mutate(PROPORTION = MUT_COUNT/TOTAL_MUT_COUNT_IN_COND) 
+
+summary_df$STRAIN = factor(summary_df$STRAIN, level = c("B6", "AKR", "ALR", "FVB", "NZB"))
+summary_df$AGE_BIN = factor(summary_df$AGE_BIN, level = c("YOUNG", "OLD"))
+#rearranged from highest to lowest mutation proportion 
+summary_df$MUTATION_TYPE = factor(summary_df$MUTATION_TYPE, level = c("G>A", "G>T", "T>C", "G>C", "DEL", "T>A", "INS", "T>G"))
+  
+```
+
+Write out the mutation type freq calculations
+```{r}
+outdir_files =  "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/change_in_mut_freq/files"  
+
+#summary df of mutation type frequencies without the HFPs in our data 
+write.table(summary_df, file = paste(outdir_files,"/mut_freq_per_type_wo_HFPs.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+Back to the drawing board with a good ole fisher's exact test -- to test if there's an association with mutation type counts and age 
+
+```{r}
+
+fe_test_df = summary_df %>% 
+  filter(!(STRAIN == "B6" & TISSUE == "Liver")) %>%
+  ungroup() %>% 
+  select(AGE_BIN, MUTATION_TYPE, MUT_COUNT) %>%
+  group_by(AGE_BIN, MUTATION_TYPE) %>% 
+  summarise(TYPE_MUT_COUNT = sum(MUT_COUNT)) %>% 
+  ungroup() %>%   
+  group_by(AGE_BIN) %>% 
+  mutate(TOTAL_MUTS_IN_AGE = sum(TYPE_MUT_COUNT)) %>% 
+  #super cool!! 
+  pivot_wider(names_from = AGE_BIN, values_from = c(TYPE_MUT_COUNT, TOTAL_MUTS_IN_AGE)) %>% 
+  mutate(OTHER_MUTS_YOUNG = TOTAL_MUTS_IN_AGE_YOUNG - TYPE_MUT_COUNT_YOUNG,
+         OTHER_MUTS_OLD = TOTAL_MUTS_IN_AGE_OLD - TYPE_MUT_COUNT_OLD) %>% 
+  select(MUTATION_TYPE, TYPE_MUT_COUNT_OLD, OTHER_MUTS_OLD, TYPE_MUT_COUNT_YOUNG, OTHER_MUTS_YOUNG) %>% 
+  mutate(MUT_TYPE_CHAR = as.character(MUTATION_TYPE)) %>%
+  select(MUT_TYPE_CHAR, TYPE_MUT_COUNT_OLD, OTHER_MUTS_OLD, TYPE_MUT_COUNT_YOUNG, OTHER_MUTS_YOUNG)
+  
+
+```
+
+Implementing fisher's exact test 
+
+```{r}
+#this loop will run through our contingency table -- where each row has information for the contingency table 
+#1) builds the tble
+#2) runs the fisher's exact test on the tbl 
+#3) adds result to df 
+# recall: matrices need to have the same type of info and we have mixed info we're saving here
+#also extracting the pval does weird things to the column name so we don't use rbind given that it assumes the same column name 
+
+iterations = nrow(fe_test_df)
+
+#initializing our df 
+output = data.frame(MUTATION_TYPE = character(),
+                    PVAL = numeric(),
+                    OR = numeric()) 
+  
+for(i in 1:iterations){
+  #creating contingency table 
+  row_of_info = fe_test_df[i,]
+
+  #capturing info that we want to keep in our df 
+  mut_type_label = row_of_info[1]
+  mut_type_old = row_of_info[2]
+  other_type_old = row_of_info[3]
+  mut_type_young = row_of_info[4]
+  other_type_young = row_of_info[5]
+  
+  #constructed our 2x2 df 
+  tbl = matrix(as.numeric(row_of_info[2:5]), ncol=2, byrow=F)
+
+  #running fisher's exact on the df 
+  fishers_results = fisher.test(tbl, alternative = "two.sided")
+
+  pval = fishers_results$p.value[1]
+  OR = fishers_results$estimate
+
+  #appending to our df 
+  results = c(mut_type_label, pval, OR)
+  
+  output[nrow(output) + 1,] = results
+}
+
+```
+
+Multiple hypothesis test correcting 
+
+```{r}
+
+output_bh_corr = output %>% 
+  mutate(ADJ_PVAL=p.adjust(PVAL, method="BH"))
+
+```
+
+
+Plotting the ~~classic~~ visualization of the mutational spectra proportions: 
+
+Figure setting(s)
+
+```{r}
+bay = pnw_palette("Bay",8,type="continuous")
+moth =  pnw_palette("Moth",12,type="continuous")
+star = pnw_palette("Starfish", 7, type = "continuous")
+
+x_axis_labs <- c("B", "H", "L")
+refactored_spec_colors = c(star[2], bay[4], moth[6], star[4], star[1], star[5], moth[9], moth[4])
+```
+
+```{r}
+
+strain_comparison = ggplot(summary_df %>% mutate(MUT_LABEL = recode(MUTATION_TYPE, "G>A" = "G>A/C>T", 
+                                                                      "G>C" = "G>C/C>G", 
+                                                                      "G>T" = "G>T/C>A", 
+                                                                      "T>A" = "T>A/A>T", 
+                                                                      "T>C" = "T>C/A>G", 
+                                                                      "T>G" = "T>G/A>C"
+                                            )), aes(x = STRAIN, y = PROPORTION, fill = MUT_LABEL, alpha = AGE_BIN)) 
+
+
+strain_comparison = strain_comparison + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) + 
+  facet_grid(TISSUE ~ MUT_LABEL, scales = "free_y") + 
+  ylab("Propotion of Mutation Type") +  
+  xlab("Tissue") + 
+  theme_bw() + 
+  scale_fill_manual(name = "Mutation Type" , values = refactored_spec_colors) +
+  scale_alpha_manual(name = "Age", labels = c("Young", "Old"), values = c(0.55, 1)) +
+  theme(strip.background=element_blank(),
+        strip.text = element_text(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 90, size = 11), 
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        strip.text.y = element_text(size = 12),
+        strip.text.x = element_text(size = 10),
+        axis.text.y=element_text(size = 10),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position="none")
+  
+pdf(paste(outdir_figures,"/classical_spectrum_strain_comparison.pdf",sep=""), width=8,height=5)
+print(strain_comparison)
+dev.off()
+```
+
+
+Plotting the change in mutation frequency 
+
+```{r}
+
+change_mut_freq = ggplot(summary_df %>% 
+                           mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O")) %>%
+                            mutate(MUT_LABEL = recode(MUTATION_TYPE, "G>A" = "G>A/C>T", 
+                                                                      "G>C" = "G>C/C>G", 
+                                                                      "G>T" = "G>T/C>A", 
+                                                                      "T>A" = "T>A/A>T", 
+                                                                      "T>C" = "T>C/A>G", 
+                                                                      "T>G" = "T>G/A>C")), aes(x = AGE_LABEL, y = FREQ, color = STRAIN, group = STRAIN))
+
+change_mut_freq = change_mut_freq + 
+  geom_line() + 
+  geom_point() + 
+  facet_grid(MUT_LABEL ~ TISSUE, scales = "free_y") + 
+  scale_color_manual(values = c("B6" = "#1d457f" , "AKR" = "#cc5c76", "ALR" = "#2f9e23", "FVB" = "#f57946", "NZB" = "#f7c22d"), guide = "none") + 
+  xlab("Age") + 
+  ylab("Average Mutation Frequency") + 
+  theme_bw(base_size = 12) + 
+  theme(strip.background=element_blank(),
+         text = element_text(family = "sans"),
+         axis.title.x = element_text(size = 6.5),
+         axis.title.y = element_text( size = 5.5),
+         strip.text.x = element_text(size = 6.25),
+         strip.text.y = element_text(size = 6),
+         axis.text.y = element_text(size = 5.5),
+         axis.text.x = element_text(size = 5.5), 
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/change_in_freq_mut_types.pdf",sep=""),  width=2.25,height=4.25)
+print(change_mut_freq)
+dev.off()
+
+```
+
+```{r}
+summary_df$TISSUE = factor(summary_df$TISSUE, level= c("Heart", "Brain", "Liver"))
+
+flipped_change_mut_freq = ggplot(summary_df %>% 
+                           mutate(AGE_LABEL = recode(AGE_BIN, "YOUNG" = "Y", "OLD" = "O")) %>%
+                            mutate(MUT_LABEL = recode(MUTATION_TYPE, "G>A" = "G>A/C>T", 
+                                                                      "G>C" = "G>C/C>G", 
+                                                                      "G>T" = "G>T/C>A", 
+                                                                      "T>A" = "T>A/A>T", 
+                                                                      "T>C" = "T>C/A>G", 
+                                                                      "T>G" = "T>G/A>C")), aes(y = AGE_LABEL, x = FREQ, color = STRAIN, group = STRAIN))
+
+flipped_change_mut_freq = flipped_change_mut_freq + 
+  geom_line() + 
+  geom_point() + 
+  facet_grid(TISSUE ~ MUT_LABEL, scales = "free_x") + 
+  scale_color_manual(values = c("B6" = "#1d457f" , "AKR" = "#cc5c76", "ALR" = "#2f9e23", "FVB" = "#f57946", "NZB" = "#f7c22d"), guide = "none") + 
+  ylab("Age") + 
+  xlab("Average Mutation Frequency") + 
+  theme_bw() + 
+  theme_bw(base_size = 12) + 
+  theme(strip.background=element_blank(),
+         text = element_text(family = "sans"),
+         axis.title.x = element_text(size = 6),
+         axis.title.y = element_text( size = 5.5),
+         strip.text.x = element_text(size = 6),
+         strip.text.y = element_text(size = 6),
+         axis.text.y = element_text(size = 5),
+         axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust = 1), 
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/flipped_change_in_freq_mut_types.pdf",sep=""), width=6,height=2.25)
+print(flipped_change_mut_freq)
+dev.off()
+
+```
+
+```{r}
+
+min_max_df = summary_df %>% 
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, FREQ) %>% 
+  ungroup() %>% 
+  group_by(AGE_BIN, MUTATION_TYPE) %>% 
+  mutate(MIN_FREQ = min(FREQ), MAX_FREQ = max(FREQ), MEDIAN_FREQ = median(FREQ)) %>% 
+  select(AGE_BIN, MUTATION_TYPE, MIN_FREQ, MAX_FREQ, MEDIAN_FREQ) %>% 
+  mutate(DUMMY_AGE = ifelse(AGE_BIN == "OLD", 0 , 1))
+
+
+min_max_df$MUTATION_TYPE = factor(min_max_df$MUTATION_TYPE, level = c("G>A", "G>T", "T>C", "G>C", "DEL", "T>A","INS", "T>G"))
+min_max_df$AGE_BIN = factor(min_max_df$AGE_BIN, level = c("OLD", "YOUNG"))
+
+
+```
+
+
+```{r}
+range_freq_mut_types = ggplot(min_max_df) + 
+  geom_segment(aes(x = MIN_FREQ, xend = MAX_FREQ, y = DUMMY_AGE, yend = DUMMY_AGE)) + 
+  geom_point(aes(x = MEDIAN_FREQ, y = DUMMY_AGE), shape = 19, size = 1, color = "black") + 
+  facet_wrap(. ~ MUTATION_TYPE, ncol = 1, strip.position = "right") + 
+  xlab("Average \nMutation Frequency") + 
+  ylab("Age") + 
+  #scale_shape_manual(name = "Age", values = c(19, 1), label = c("Old", "Young"), guide = "none") +
+  theme_bw(base_size = 14) + 
+  scale_y_continuous(limits = c(-1, 2), labels = c("", "O", "Y",""), position = "right") +    
+  coord_cartesian(expand = FALSE, 
+                  xlim = c(0, 1e-5)) + 
+  theme(strip.background=element_blank(),
+        strip.text.y = element_blank(),
+         text = element_text(family = "sans"),
+         axis.title.x = element_text(size = 8),
+        axis.text.x = element_text(size = 6, angle = 90, hjust = 1, vjust = 1),
+        axis.title.y = element_blank(),
+        axis.text.y = element_text(size = 7), 
+        axis.ticks.y = element_blank(), 
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(),
+        axis.line.x  = element_line(colour = "black"),
+        legend.position = "none"
+        )
+
+pdf(paste(outdir_figures,"/range_freq_mut_types.pdf",sep=""), width=1.5, height=4.75)
+print(range_freq_mut_types)
+dev.off()
+
+pdf(paste(outdir_figures,"/leg_range_freq_mut_types.pdf",sep=""), width=2.25, height=5.5)
+print(range_freq_mut_types + scale_shape_manual(name = "Age", values = c(1, 19), label = c("Young", "Old")) + guides(shape = guide_legend(override.aes = list(size = 2.5))) + theme(legend.position = "bottom")) 
+dev.off()
+
+```
+
+
+Calculating the delta in mutation frequency for each type 
+
+```{r}
+
+delta_fig_df = summary_df %>% 
+  filter(!(STRAIN == "B6" & TISSUE == "Liver")) %>%
+  ungroup()%>% 
+  select(STRAIN, TISSUE, AGE_BIN, MUTATION_TYPE, FREQ) %>% 
+  pivot_wider(values_from = FREQ, names_from = AGE_BIN) %>% 
+  mutate(BETA = OLD - YOUNG)
+
+delta_fig_df$TISSUE = factor(delta_fig_df$TISSUE, level = c("Heart", "Brain", "Liver"))
+
+```
+
+```{r}
+
+delta_fig = ggplot(delta_fig_df, aes(x = BETA, y = STRAIN, color = STRAIN, shape = TISSUE)) 
+
+delta_fig = delta_fig + 
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray") + 
+  geom_point() + 
+  facet_grid(TISSUE ~ MUTATION_TYPE, scales = "free_x") + 
+  xlab("Beta Mutation Frequency\n (Old - Young)") + 
+  ylab("Strain") + 
+  scale_color_manual(values = c("B6" = "#1d457f" , "AKR" = "#cc5c76", "ALR" = "#2f9e23", "FVB" = "#f57946", "NZB" = "#f7c22d"), guide = "none") +
+  scale_shape_manual(values = c(17, 19, 15)) + 
+  theme_bw(base_size = 16) + 
+  theme(strip.background=element_blank(),
+        strip.text = element_text(),
+        text = element_text(family = "sans"),
+        axis.text.x = element_text(angle = 90, size = 8), 
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        strip.text.y = element_text(size = 10),
+        strip.text.x = element_text(size = 9),
+        axis.text.y=element_text(size = 8),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position="none")
+
+pdf(paste(outdir_figures,"/beta_mut_types.pdf",sep=""),  width=6,height=3)
+print(delta_fig)
+dev.off()
+
+
+```
+

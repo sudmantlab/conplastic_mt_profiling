@@ -1,0 +1,254 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/checking_NUMT")
+
+outdir_figures = "figures/"
+outdir_files = "files/"
+
+read_depth_file = "files/junction_conservative_est_merged_read_depth.txt" 
+read_depth = read.table(read_depth_file, header = FALSE, stringsAsFactors = FALSE)
+
+#this file contains the read depth in the NUMT region 
+supertable_file = "../input_files/supertable.txt"
+supertable = read.table(supertable_file, header = TRUE, stringsAsFactors = FALSE)
+
+```
+
+```{r}
+#the amount of reads mapping to the region in chrM given that we masked the NUMT 
+average_depth_chrM_NUMT_region = supertable %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS) %>% 
+  unique() %>% 
+  select(STRAIN, TISSUE, AGE_BIN, START, READ_DEPTH_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, START) %>%
+  summarise(COND_READ_DEPTH_AT_POS = sum(READ_DEPTH_AT_POS)) %>%
+  #filtering for just the NUMT region 
+  filter(START >= 6394 & START <= 11042) %>%
+  ungroup() %>%
+  #calculating the average read depth in the chrM NUMT region
+  select(STRAIN, TISSUE, AGE_BIN, COND_READ_DEPTH_AT_POS) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN) %>% 
+  summarise(AVG_READ_DEPTH = mean(COND_READ_DEPTH_AT_POS)) 
+
+```
+
+
+```{r}
+rm(supertable)
+```
+
+```{r}
+colnames(read_depth) = c("CHRM", "START", "DEPTH", "FILENAME")
+
+read_depth = read_depth %>%
+  separate(FILENAME, c("STRAIN", "AGE", "TISSUE"), sep = "_", extra = "drop", fill = "right")
+
+```
+
+
+```{r}
+#our read depth for mapping to the NUMT and chrM
+#here we did not enforce strict filters but looked at the read depth in junction regions 
+read_depth = read_depth %>% 
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN)) %>%
+  mutate(AGE_BIN = ifelse(grepl("O", AGE), "OLD", "YOUNG")) %>%
+  select(STRAIN, TISSUE, AGE_BIN, CHRM, START, DEPTH) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, CHRM, START) %>% 
+  summarise(COND_DEPTH = sum(DEPTH)) 
+
+```
+
+```{r}
+
+chr1_region_labeler = function(position) {
+  start_chrm1_NUMT = 24611535
+  end_chrm1_NUMT = 24616184
+  mid_range_chrm1_NUMT_start = 24611535 + 2320
+  mid_range_chrm1_NUMT_end = 24611535 + 2330
+  
+  #recall that the NUMT is in the - orientation on chr1
+  if(position < start_chrm1_NUMT & position >= (start_chrm1_NUMT-10)) {
+    label = "JUNCTION_AFTER"} 
+  else if (position > end_chrm1_NUMT & position <= (end_chrm1_NUMT+10)) {
+    label = "JUNCTION_BEFORE"}
+  else if (position >= mid_range_chrm1_NUMT_start & position < mid_range_chrm1_NUMT_end) {
+      label = "MID_RANGE_NUMT"}
+  else if (position <= mid_range_chrm1_NUMT_start & position >= start_chrm1_NUMT) {
+    label = "BEFORE_MID_NUMT"}
+  else {
+    label = "AFTER_MID_NUMT"}
+  return(label)
+}
+
+```
+
+```{r}
+
+chrM_region_labeler = function(position) {
+  start_chrmM_region = 6394
+  end_chrmM_region = 11042
+  mid_range_chrmM_region_start = 6394 + 2320
+  mid_range_chrmM_region_end = 6394 + 2330
+  
+  if(position < start_chrmM_region & position >= (start_chrmM_region-10)) {
+    label = "JUNCTION_BEFORE"} 
+  else if (position > end_chrmM_region & position <= (end_chrmM_region+10)) {
+    label = "JUNCTION_AFTER"}
+  else if (position >= mid_range_chrmM_region_start & position < mid_range_chrmM_region_end) {
+      label = "MID_RANGE_NUMT"}
+  else if (position <= mid_range_chrmM_region_start & position >= start_chrmM_region) {
+    label = "BEFORE_MID_NUMT"}
+  else {
+    label = "AFTER_MID_NUMT"}
+  return(label)
+}
+
+```
+
+Labeling the regions for our chr1
+```{r}
+start_chrm1_NUMT = 24611535
+end_chrm1_NUMT = 24616184
+  
+chr1_binned_read_depth = read_depth %>% 
+  filter(CHRM == "chr1") %>% 
+  #filtering info for the junction before and after
+  #and the NUMT region itself
+  filter(START > start_chrm1_NUMT-10) %>% 
+  filter(START < end_chrm1_NUMT+10) %>%
+  rowwise() %>% 
+  mutate(REGION = chr1_region_labeler(START)) %>%
+  #calculating the average depth in the region %>%
+  select(STRAIN, TISSUE, AGE_BIN, CHRM, COND_DEPTH, REGION) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, CHRM, REGION) %>%
+  summarise(AVG_DEPTH_PER_REGION = mean(COND_DEPTH))
+  
+```
+
+
+Labeling the regions for our chrM
+```{r}
+
+start_chrmM_region = 6394
+end_chrmM_region = 11042
+
+chrM_binned_read_depth = read_depth %>% 
+  filter(CHRM == "chrM") %>% 
+  #filtering info for the junction before and after
+  #and the NUMT region itself
+  filter(START > start_chrmM_region-10) %>% 
+  filter(START < end_chrmM_region+10) %>%
+  rowwise() %>% 
+  mutate(REGION = chrM_region_labeler(START)) %>%
+  #calculating the average depth in the region %>%
+  select(STRAIN, TISSUE, AGE_BIN, CHRM, COND_DEPTH, REGION) %>%
+  group_by(STRAIN, TISSUE, AGE_BIN, CHRM, REGION) %>%
+  summarise(AVG_DEPTH_PER_REGION = mean(COND_DEPTH))
+  
+```
+
+Now let's concat our info for the chrM and chr1 region so that we can do all our calculations in one df 
+
+```{r}
+merged_info = rbind(chrM_binned_read_depth, chr1_binned_read_depth)
+
+```
+
+
+```{r}
+
+rm(chrM_binned_read_depth, chr1_binned_read_depth)
+
+```
+
+```{r}
+cont_est_df = left_join(merged_info, average_depth_chrM_NUMT_region, by = c("STRAIN", "TISSUE", "AGE_BIN")) 
+
+```
+
+```{r}
+output_df = cont_est_df %>%
+  mutate(CONT_EST = AVG_DEPTH_PER_REGION/AVG_READ_DEPTH) %>%
+  select(STRAIN, TISSUE, AGE_BIN, CHRM, REGION, CONT_EST) %>% 
+  pivot_wider(names_from = REGION, values_from = CONT_EST)
+
+```
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/checking_NUMT")
+
+
+write.table(output_df, file = paste(outdir_files,"cons_junction_cont_est.txt", sep = ""), sep = "\t", quote = F, row.names = T)
+
+```
+
+Plotting the ratio of reads mapping before the NUMT and to the mid range of the NUMT
+
+```{r}
+
+plotting_df = output_df %>% 
+  mutate(X_LABEL = paste(STRAIN,"_",TISSUE,"_",AGE_BIN))
+
+```
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/checking_NUMT")
+
+before_NUMT_comparison = ggplot(plotting_df, aes(x = X_LABEL, y = JUNCTION_BEFORE, color = CHRM)) + 
+  scale_y_log10() + 
+  geom_point() + 
+  theme_bw() + 
+  ylab("Ratio of Reads Mapped [log10]\n (Junction Before: chrM)") + 
+  xlab("Condition") + 
+  scale_color_manual(name = "Chromosome", values = c("cornflowerblue", "black")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 9),
+        text = element_text(family = "sans"),
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        axis.text.y=element_text(size = 9), 
+        legend.position = "None")
+
+pdf(paste(outdir_figures,"before_NUMT_junction.pdf",sep=""),width=5,height=4.25)
+print(before_NUMT_comparison)
+dev.off()
+
+pdf(paste(outdir_figures,"leg_before_NUMT_junction.pdf",sep=""),width=5,height=4.5)
+print(before_NUMT_comparison + guides(color = guide_legend(override.aes = list(size = 3))) + theme(legend.position = "bottom", legend.text = element_text(size = 12)))
+dev.off()
+
+```
+
+```{r}
+setwd("~/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/checking_NUMT")
+
+
+after_NUMT_comparison = ggplot(plotting_df, aes(x = X_LABEL, y = JUNCTION_AFTER, color = CHRM)) + 
+  scale_y_log10() + 
+  geom_point() + 
+  theme_bw() + 
+  xlab("Condition") + 
+  ylab("Ratio of Reads Mapped [log10]\n (Junction After: Midpoint of NUMT)") + 
+  scale_color_manual(name = "Chromosome", values = c("cornflowerblue", "black")) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 9),
+        text = element_text(family = "sans"),
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        axis.text.y=element_text(size = 9), 
+        legend.position = "None")
+
+pdf(paste(outdir_figures,"after_NUMT_junction.pdf",sep=""),width=5,height=4.25)
+print(after_NUMT_comparison)
+dev.off()
+
+```

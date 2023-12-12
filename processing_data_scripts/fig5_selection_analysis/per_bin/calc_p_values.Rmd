@@ -1,0 +1,134 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+Importing our obs and sim hnhs ratios
+
+```{r}
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+outdir_files = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/files/"
+
+outdir_figures = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/figures/"
+
+sims_file = "files/sim_hNhS_ratios_per_gene_per_bin.txt"
+sim_ratios = read.table(sims_file, sep = "\t")
+
+obs_ratios_file = "files/obs_hNhS_ratios_per_gene_per_bin.txt"
+obs_ratios = read.table(obs_ratios_file, sep = "\t")
+```
+
+
+Calculate the stats summary of the sim data -- this will help us create a z-score that we can use to calculate a 2-tailed test for significance 
+
+```{r}
+#calculate stats summaries across the simulation runs (e.g. average hnhs across sims)
+stats_sims = sim_ratios %>% 
+  select(STRAIN, TISSUE, AGE_BIN, BIN, GENE, SIM_RATIO) %>% 
+  group_by(STRAIN, TISSUE, AGE_BIN, BIN, GENE) %>% 
+  summarise(SIM_AVG = mean(SIM_RATIO), 
+            SIM_SD = sd(SIM_RATIO))
+```
+
+Merge our observed and our stats_sims dfs 
+
+```{r}
+merged_data = stats_sims %>% 
+  left_join(obs_ratios, by = c("STRAIN", "TISSUE", "AGE_BIN", "BIN", "GENE")) %>%
+  #in the case where we could not calculate the obs ratio we will have NAs in the df 
+  drop_na()
+```
+
+Removing files from memory:
+
+```{r}
+rm(obs_ratios, stats_sims)
+```
+
+We want to compare each sim hnhs to the obs hnhs and determine if that sim is more extreme than the obs ratio so we need the corresponding obs ratio with each sim ratio for comparison: 
+
+```{r}
+comp_df = sim_ratios %>% 
+  select(STRAIN, TISSUE, AGE_BIN, BIN, SIM_RUN, GENE, SIM_RATIO) %>%
+  left_join(merged_data, by = c("STRAIN", "TISSUE", "AGE_BIN", "BIN", "GENE")) %>%
+  #again we'd have NAs in places where we could not calculate an obs ratio
+  drop_na()
+```
+
+```{r}
+rm(sim_ratios)
+```
+
+We create a z-score to help us determine which tail we will calculating extremes with respect to
+
+```{r}
+#we compare our sim and obs hnhs value with respect to the average sim hnhs
+#by doing so we identify which tail we are referring to as containing our extreme values
+z_scored_data = comp_df %>% 
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, BIN, GENE, SIM_RUN, SIM_RATIO, OBS_RATIO, SIM_AVG) %>%
+  mutate(Z_SIM = SIM_RATIO - SIM_AVG, Z_OBS = OBS_RATIO - SIM_AVG)
+
+#lower tail if the difference in neg and upper tail if the difference is pos
+```
+
+Now we calculate the p-values
+
+```{r}
+
+p_vals = z_scored_data %>% 
+  ungroup() %>%
+  select(STRAIN, TISSUE, AGE_BIN, BIN, GENE, OBS_RATIO, Z_SIM, Z_OBS) %>% 
+  #how many data points do we have for each gene -- remember we filtered out sims where nsyn or syn had a count of 0
+  group_by(STRAIN, TISSUE, AGE_BIN, BIN, GENE, OBS_RATIO, Z_OBS) %>% 
+  mutate(SIM_TOTAL = n()) %>% 
+  ungroup() %>%
+  mutate(POS_Z_OBS = abs(Z_OBS), NEG_Z_OBS = -1*POS_Z_OBS) %>% 
+  #identify if our simulations generate values passed our obs pt in their respective upper or lower tails -- this is based on the Z_OBS sign --> greater or lower than the expected 
+  #if our Z_OBS is negative then, look to see how many NEG_Z_OBS are smaller than Z_SIM, if it's not then look to see how many Z_SIM is larger than (basically see how many points DO surpass Z_OBS at the tails)
+  mutate(COMP_Z_OBS = ifelse(Z_OBS < 0, ifelse(NEG_Z_OBS >= Z_SIM, 1, 0), ifelse(POS_Z_OBS <= Z_SIM, 1, 0))) %>% 
+  #we need to count how many points are more extreme than our obs value under the null
+  select(STRAIN, TISSUE, AGE_BIN, BIN, GENE, SIM_TOTAL, OBS_RATIO, Z_OBS, COMP_Z_OBS) %>% 
+  #Z_OBS should be the same across sims in a condition
+  group_by(STRAIN, TISSUE, AGE_BIN, BIN, GENE, SIM_TOTAL, OBS_RATIO, Z_OBS) %>% 
+  #this sum is the number of sims that surpass our z_obs score at the tails
+  summarise(SUM_COMPARISON = sum(COMP_Z_OBS)) %>% 
+  #multiplying by 2 to create a 2-tailed test --> assuming that we have a symmetric distribution; this will allow for a stricter significance level & more reliable/conservative results
+  mutate(P_VALUE = 2*(SUM_COMPARISON/SIM_TOTAL)) %>%
+  ungroup() %>%
+  group_by(BIN) %>%
+  mutate(P_ADJ = p.adjust(P_VALUE, method = "BH"))
+  
+```
+20 cases with the lowest p-vals (including those that are not significant) are negative selection
+
+```{r}
+
+sig_hits = p_vals %>%
+  filter(P_ADJ < 0.01) 
+
+```
+
+
+Exporting the significant ratio hits & the file for all calculated p-values
+```{r}
+
+setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/genomewide_selection_scan/hnhs_per_freq_bin/")
+
+write.table(sig_hits, file = paste(outdir_files,"/per_bin_sig_hnhs_ratios.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+write.table(p_vals, file = paste(outdir_files,"/per_bin_hnhs_pvals.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+
+
+
+
+
