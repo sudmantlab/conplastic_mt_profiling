@@ -24,15 +24,16 @@ copy_num = read.table(copy_num_file, header=TRUE, stringsAsFactors = FALSE)
 ```{r}
 
 copy_num_cleaned = copy_num %>%
-  separate(Sample, into = c("STRAIN_AGE", "TISSUE"), sep = "_") %>%
+  separate(Sample, into = c("STRAIN_AGE", "TISSUE"), sep = "_", remove = FALSE) %>%
   mutate(Age = case_when(grepl("O", STRAIN_AGE) ~ "O",
                                    grepl("Y", STRAIN_AGE) ~ "Y",
                                    TRUE ~ "MID")) %>%
   filter(Age != "MID") %>%
   separate(STRAIN_AGE, into = c("STRAIN", "AGE_DEL"), sep = "O|Y") %>%
-  select(STRAIN, TISSUE, Age, mGE.nGE) %>%
+  select(Sample, STRAIN, TISSUE, Age, mGE.nGE) %>%
   #filter out the condition we had to eliminate due to possible contamination
   filter(!(STRAIN == "B6" & TISSUE == "Liver" & Age == "Y")) %>%
+  filter(Sample != "B6Y3_Heart") %>%
   mutate(TISSUE = ifelse(TISSUE == "Heasrt", "Heart", TISSUE))
 
 ```
@@ -42,8 +43,15 @@ copy_num_cleaned = copy_num %>%
 
 plotting_df = copy_num_cleaned %>%
   group_by(STRAIN, TISSUE, Age) %>%
-  summarise(AVG = mean(mGE.nGE), SE = sd(mGE.nGE)/sqrt(n())) %>%
-  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN))
+  mutate(AVG = mean(mGE.nGE), SE = sd(mGE.nGE)/sqrt(n())) %>%
+  mutate(STRAIN = ifelse(STRAIN == "F", "FVB", STRAIN)) %>%
+  mutate(DUMMY_STRAIN = case_when(STRAIN == "B6" ~ 1,
+                             STRAIN == "AKR" ~ 2,
+                             STRAIN == "ALR" ~ 3,
+                             STRAIN == "FVB" ~ 4, 
+                             TRUE ~ 5)) %>%
+  mutate(DUMMY_X = ifelse(Age == "Y", DUMMY_STRAIN - 0.23, DUMMY_STRAIN + 0.23)) %>%
+  mutate(DUMMY_X = ifelse((STRAIN == "B6" & TISSUE == "Liver"), 1, DUMMY_X))
 
 
 plotting_df$STRAIN = factor(plotting_df$STRAIN, levels = c("B6", "AKR", "ALR", "FVB", "NZB"))
@@ -52,12 +60,14 @@ plotting_df$Age = factor(plotting_df$Age, levels = c("Y", "O"))
 
 ```{r}
 
-mtdna_cn = ggplot(plotting_df, aes(x = STRAIN, y = AVG, fill = Age)) + 
+mtdna_cn = ggplot(plotting_df, aes(x = DUMMY_STRAIN, y = AVG, fill = Age)) + 
   geom_bar(stat = "identity", position = position_dodge()) + 
   geom_errorbar(aes(ymin = AVG-SE, ymax = AVG+SE), position = position_dodge(0.9), width = 0.1) + 
+  geom_point(aes(x = DUMMY_X, y = mGE.nGE), size = 0.4, color = "black") + 
   facet_wrap(.~TISSUE, nrow = 3) + 
   theme_bw() + 
   scale_fill_manual(values = c("#A9A9A9", "#71797E")) + 
+  scale_x_continuous(breaks = 1:5, labels = c("B6", "AKR", "ALR", "FVB", "NZB")) + 
   xlab("Strain") + 
   ylab("Average mtDNA copy number") + 
   theme(strip.background = element_blank(),
