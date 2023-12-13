@@ -150,9 +150,9 @@ serrano_mut_freqs_filled = serrano_mut_freqs %>%
 ```{r}
 summary_serrano = serrano_mut_freqs_filled %>%
   ungroup() %>% 
-  select(STRAIN, TISSUE, AGE_BIN, MUT_TYPE, MUT_FREQ) %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, MUT_TYPE, MUT_FREQ) %>%
   group_by(STRAIN, TISSUE, AGE_BIN, MUT_TYPE) %>%
-  summarise(AVG = mean(MUT_FREQ), SAMP_COUNT = n(), SE = sd(MUT_FREQ)/sqrt(SAMP_COUNT)) %>%
+  mutate(AVG = mean(MUT_FREQ), SAMP_COUNT = n(), SE = sd(MUT_FREQ)/sqrt(SAMP_COUNT)) %>%
   mutate(X_POS = recode(MUT_TYPE, "G>A" = 1, "C>T" = 2, "G>C" = 3, "C>G" = 4, "G>T" = 5, "C>A" = 6, "T>A" = 7, "A>T" = 8,
                         "T>C" = 9, "A>G" = 10, "T>G" = 11, "A>C"= 12))
 
@@ -355,6 +355,25 @@ fe_pval_labels$AGE_BIN = factor(fe_pval_labels$AGE_BIN, levels = c("YOUNG", "OLD
 
 ```
 
+We want to plot the data points on the bars
+
+```{r}
+summary_serrano = summary_serrano %>%
+  mutate(X_POINT = case_when(
+    STRAIN == "B6" ~ X_POS - 0.36,
+    STRAIN == "AKR" ~ X_POS - 0.20,
+    STRAIN == "ALR" ~ X_POS - 0.02, 
+    STRAIN == "F" ~ X_POS + 0.2,
+    TRUE ~ X_POS + 0.37
+  )) %>%
+  mutate(X_POINT = ifelse((TISSUE == "Liver" & AGE_BIN == "YOUNG"), 
+         case_when(STRAIN == "AKR"~ X_POS - 0.34,
+                   STRAIN == "ALR" ~ X_POS - 0.12,
+                   STRAIN == "F" ~ X_POS + 0.15,
+                   TRUE ~ X_POS + 0.33)
+         ,X_POINT))
+```
+
 Plotting the mutation frequencies 
 
 ```{r}
@@ -369,6 +388,7 @@ summary_serrano_plot = summary_serrano_plot +
   geom_bar(stat = "identity", position = position_dodge()) +
   geom_errorbar(aes(ymin=AVG-SE, ymax=AVG+SE), width=.2,
                  position=position_dodge(.9)) +
+  geom_point(aes(x = X_POINT, y = MUT_FREQ), size = 0.2) + 
   facet_grid(TISSUE ~ AGE_BIN, scales = "free_y", labeller = labeller(AGE_BIN = age.labels)) + 
   ylab("Mutation frequency") + 
   xlab("Mutation Type") + 
@@ -391,27 +411,44 @@ Splitting the plot into 2 to showcase all mutation frequencies clearly
 
 ```{r}
 larger_freqs_df = summary_serrano %>%
-  filter(MUT_TYPE == "G>A" | MUT_TYPE == "C>T" | MUT_TYPE == "G>T" | MUT_TYPE == "C>A")
+  filter(MUT_TYPE == "G>A" | MUT_TYPE == "C>T" | MUT_TYPE == "G>T" | MUT_TYPE == "C>A") %>% 
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, MUT_TYPE, MUT_FREQ, AVG, SE) %>%
+  mutate(X_POS = case_when(MUT_TYPE == "G>A" ~ 1,
+                           MUT_TYPE == "C>T" ~ 2,
+                           MUT_TYPE == "G>T" ~ 3,
+                           MUT_TYPE == "C>A" ~ 4)) %>%
+  mutate(X_POINT = case_when(
+    STRAIN == "B6" ~ X_POS - 0.36,
+    STRAIN == "AKR" ~ X_POS - 0.18,
+    STRAIN == "ALR" ~ X_POS, 
+    STRAIN == "F" ~ X_POS + 0.18,
+    TRUE ~ X_POS + 0.36
+  )) %>%
+  mutate(X_POINT = ifelse((TISSUE == "Liver" & AGE_BIN == "YOUNG"), 
+         case_when(STRAIN == "AKR"~ X_POS - 0.34,
+                   STRAIN == "ALR" ~ X_POS - 0.12,
+                   STRAIN == "F" ~ X_POS + 0.13,
+                   TRUE ~ X_POS + 0.33)
+         ,X_POINT))
+  
 ```
 
-```{r}
-smaller_freqs_df = summary_serrano %>%
-  filter(!(MUT_TYPE == "G>A" | MUT_TYPE == "C>T" | MUT_TYPE == "G>T" | MUT_TYPE == "C>A"))
-```
 
 Plotting the larger mutation frequencies 
 
 ```{r}
-larger_mut_freqs_plot = ggplot(larger_freqs_df, aes(x = MUT_TYPE, y = AVG, fill = STRAIN)) 
+larger_mut_freqs_plot = ggplot(larger_freqs_df, aes(x = X_POS, y = AVG, fill = STRAIN)) 
 
 larger_mut_freqs_plot = larger_mut_freqs_plot + 
   geom_bar(stat = "identity", position = position_dodge()) +
   geom_errorbar(aes(ymin=AVG-SE, ymax=AVG+SE), width=.2,
                  position=position_dodge(.9)) +
+  geom_point(aes(x = X_POINT, y = MUT_FREQ), size = 0.2) +
   facet_grid(TISSUE ~ AGE_BIN, scales = "free_y", labeller = labeller(AGE_BIN = age.labels)) + 
   ylab("Mutation frequency") + 
   xlab("Mutation Type") + 
   theme_bw() + 
+  scale_x_continuous(breaks = 1:4, labels = c("G>A", "C>T", "G>T", "C>A")) + 
   scale_fill_manual(values = c("B6"= "#1d457f","AKR" = "#cc5c76", "ALR" = "#2f9e23", "F" = "#f57946", "NZB" = "#f7c22d")) +
   theme(axis.text.x = element_text(angle = 90),
         strip.background = element_blank(),
@@ -425,17 +462,46 @@ dev.off()
 Plotting the smaller mutation frequencies 
 
 ```{r}
-smaller_mut_freqs_plot = ggplot(smaller_freqs_df, aes(x = MUT_TYPE, y = AVG, fill = STRAIN)) 
+smaller_freqs_df = summary_serrano %>%
+  filter(!(MUT_TYPE == "G>A" | MUT_TYPE == "C>T" | MUT_TYPE == "G>T" | MUT_TYPE == "C>A")) %>%
+  select(SAMPLE, STRAIN, TISSUE, AGE_BIN, MUT_TYPE, MUT_FREQ, AVG, SE) %>%
+  mutate(X_POS = case_when(MUT_TYPE == "G>C" ~ 1,
+                           MUT_TYPE == "C>G" ~ 2,
+                           MUT_TYPE == "T>A" ~ 3,
+                           MUT_TYPE == "A>T" ~ 4,
+                           MUT_TYPE == "T>C" ~ 5,
+                           MUT_TYPE == "A>G" ~ 6,
+                           MUT_TYPE == "T>G" ~ 7,
+                           MUT_TYPE == "A>C" ~ 8)) %>%
+  mutate(X_POINT = case_when(
+    STRAIN == "B6" ~ X_POS - 0.36,
+    STRAIN == "AKR" ~ X_POS - 0.18,
+    STRAIN == "ALR" ~ X_POS, 
+    STRAIN == "F" ~ X_POS + 0.18,
+    TRUE ~ X_POS + 0.36
+  )) %>%
+  mutate(X_POINT = ifelse((TISSUE == "Liver" & AGE_BIN == "YOUNG"), 
+         case_when(STRAIN == "AKR"~ X_POS - 0.34,
+                   STRAIN == "ALR" ~ X_POS - 0.12,
+                   STRAIN == "F" ~ X_POS + 0.13,
+                   TRUE ~ X_POS + 0.33)
+         ,X_POINT))
+```
+
+```{r}
+smaller_mut_freqs_plot = ggplot(smaller_freqs_df, aes(x = X_POS, y = AVG, fill = STRAIN)) 
 
 smaller_mut_freqs_plot = smaller_mut_freqs_plot + 
   geom_bar(stat = "identity", position = position_dodge()) +
   geom_errorbar(aes(ymin=AVG-SE, ymax=AVG+SE), width=.2,
                  position=position_dodge(.9)) +
+  geom_point(aes(x = X_POINT, y = MUT_FREQ), size = 0.2) +
   facet_grid(TISSUE ~ AGE_BIN, scales = "free_y", labeller = labeller(AGE_BIN = age.labels)) + 
   ylab("Mutation frequency") + 
   xlab("Mutation Type") + 
   theme_bw() + 
   scale_fill_manual(values = c("B6"= "#1d457f","AKR" = "#cc5c76", "ALR" = "#2f9e23", "F" = "#f57946", "NZB" = "#f7c22d")) +
+  scale_x_continuous(breaks = 1:8, labels = c("G>C", "C>G", "T>A", "A>T", "T>C", "A>G", "T>G", "A>C")) + 
   theme(axis.text.x = element_text(angle = 90),
         strip.background = element_blank(),
         legend.position = "bottom")
