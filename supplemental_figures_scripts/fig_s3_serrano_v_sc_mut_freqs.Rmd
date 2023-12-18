@@ -15,18 +15,10 @@ setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_
 outdir_figures = "figures/"
 outdir_files = "files/"
 
-#summary files that we use to create the figure
-serrano_summary_mutfreqs_file = "files/serrano_summary_de_novo_mut_freqs.txt"
-
-sc_summary_mutfreqs_file = "files/sc_summary_de_novo_mut_freqs.txt"
-
 #files that we use for our t-test comparisons -- includes the mutation frequency per sample
 serrano_mutfreqs_file = "files/serrano_de_novo_mut_freqs.txt"
 sc_mutfreqs_file = "files/sc_de_novo_mut_freqs.txt"
 
-#note specifying the delimeter eliminates the rows with ## or # in the entry -- the headers that were not filtered out because these 3 files had 2 more header lines than the other files 
-serrano_summary_mutfreqs = read.table(serrano_summary_mutfreqs_file, sep = '\t', header = TRUE)
-sc_summary_mutfreqs = read.table(sc_summary_mutfreqs_file, sep = '\t', header = TRUE)
 
 serrano_mutfreqs = read.table(serrano_mutfreqs_file, sep = '\t', header = TRUE)
 sc_mutfreqs = read.table(sc_mutfreqs_file, sep = '\t', header = TRUE)
@@ -35,40 +27,58 @@ sc_mutfreqs = read.table(sc_mutfreqs_file, sep = '\t', header = TRUE)
 Creating our figure: 
 
 ```{r}
-sc_study = sc_summary_mutfreqs %>%
+sc_plotting_df = sc_mutfreqs %>%
+  select(MouseID, AGE_BIN, Tissue, MUT_TYPE, MUT_FREQ) %>%
+  rename(SAMPLE = MouseID) %>%
   ungroup() %>%
   #we only compare the tissues that are also included in our study
   filter(Tissue == "L" | Tissue == "He" | Tissue == "C") %>%
-  select(Tissue, AGE_BIN, MUT_TYPE, AVG, SE) %>%
-  mutate(Study = "Sanchez-Contreras") %>%
-  mutate(Tissue_Label = recode(Tissue, C = "WB/Cere", He = "Heart", L = "Liver")) %>%
-  mutate(Age_Label = ifelse(AGE_BIN == "OLD", "Old", "Young")) %>%
-  select(Tissue_Label, Age_Label, MUT_TYPE, AVG, SE, Study)
+  mutate(TISSUE_LABEL = recode(Tissue, C = "WB/Cere", He = "Heart", L = "Liver")) %>%
+  mutate(AGE_LABEL = ifelse(AGE_BIN == "OLD", "Old", "Young")) %>%
+  select(SAMPLE, TISSUE_LABEL, AGE_LABEL, MUT_TYPE, MUT_FREQ) %>%
+  group_by(TISSUE_LABEL, AGE_LABEL, MUT_TYPE) %>%
+  mutate(AVG = mean(MUT_FREQ), SAMP_COUNT = n(), SE = sd(MUT_FREQ)/sqrt(SAMP_COUNT)) %>%
+  mutate(STUDY = "Sanchez-Contreras") %>%
+  select(SAMPLE, TISSUE_LABEL, AGE_LABEL, MUT_TYPE, MUT_FREQ, AVG, SAMP_COUNT, SE, STUDY)
+  
 ```
 
 ```{r}
 
-serrano_df = serrano_summary_mutfreqs %>%
+serrano_plotting_df = serrano_mutfreqs %>%
   #we only compare across B6 ancestry, which is what SC have in their study
   filter(STRAIN == "B6") %>%
-  select(TISSUE, AGE_BIN, MUT_TYPE, AVG, SE) %>% 
-  mutate(Study = "Serrano") %>%
-  #recoding the brain label to match that of SC
-  mutate(Tissue_Label = recode(TISSUE, Brain = "WB/Cere")) %>%
-  mutate(Age_Label = ifelse(AGE_BIN == "OLD", "Old", "Young")) %>%
-  select(Tissue_Label, Age_Label, MUT_TYPE, AVG, SE, Study)
+  #recoding the brain and age label to match that of SC
+  mutate(TISSUE_LABEL = recode(TISSUE, Brain = "WB/Cere")) %>%
+  mutate(AGE_LABEL = ifelse(AGE_BIN == "OLD", "Old", "Young")) %>%
+  select(SAMPLE, TISSUE_LABEL, AGE_LABEL, MUT_TYPE, MUT_FREQ) %>%
+  group_by(TISSUE_LABEL, AGE_LABEL, MUT_TYPE) %>%
+  mutate(AVG = mean(MUT_FREQ), SAMP_COUNT = n(), SE = sd(MUT_FREQ)/sqrt(SAMP_COUNT)) %>%
+  #adding the study name 
+  mutate(STUDY = "Serrano") 
 
 ```
+
 
 Merging our datasets to plot study comparisons
 
 ```{r}
-comp_df = serrano_df %>% 
-  rbind(sc_study)
+comp_df = serrano_plotting_df %>% 
+  rbind(sc_plotting_df) %>%
+  mutate(DUMMY_X = case_when(
+    MUT_TYPE == "G>A" ~ 1, MUT_TYPE == "C>T" ~ 2,
+    MUT_TYPE == "G>C" ~ 3, MUT_TYPE == "C>G" ~ 4,
+    MUT_TYPE == "G>T" ~ 5, MUT_TYPE == "C>A" ~ 6,
+    MUT_TYPE == "T>A" ~ 7, MUT_TYPE == "A>T" ~ 8,
+    MUT_TYPE == "T>C" ~ 9, MUT_TYPE == "A>G" ~ 10,
+    MUT_TYPE == "T>G" ~ 11, MUT_TYPE == "A>C" ~ 12
+  )) %>%
+  mutate(DUMMY_X_POINT = ifelse(STUDY == "Serrano", DUMMY_X + 0.23, DUMMY_X - 0.23)) %>%
+  mutate(DUMMY_X_POINT = ifelse((TISSUE_LABEL == "Liver" & AGE_LABEL == "Young"), DUMMY_X, DUMMY_X_POINT))
 
 comp_df$MUT_TYPE = factor(comp_df$MUT_TYPE, level = c("G>A","C>T", "G>C", "C>G", "G>T", "C>A", "T>A", "A>T", "T>C", "A>G", "T>G", "A>C"))
-comp_df$Age_Label = factor(comp_df$Age_Label, level = c("Young", "Old"))
-comp_df$Tissue_Label = factor(comp_df$Tissue_Label, level = c("Heart", "Liver", "WB/Cere"))
+comp_df$AGE_LABEL = factor(comp_df$AGE_LABEL, level = c("Young", "Old"))
+comp_df$TISSUE_LABEL = factor(comp_df$TISSUE_LABEL, level = c("Heart", "Liver", "WB/Cere"))
 ```
 
 Plotting our frequencies against each other
@@ -77,16 +87,18 @@ Plotting our frequencies against each other
 
 setwd("/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/strand_bias/")
 
-study_freq_comp = ggplot(comp_df, aes(x = MUT_TYPE, y = AVG, fill = Study)) 
+study_freq_comp = ggplot(comp_df, aes(x = DUMMY_X, y = AVG, fill = STUDY)) 
 
 study_freq_comp = study_freq_comp + 
   geom_bar(stat = "identity", position = position_dodge()) +
   geom_errorbar(aes(ymin=AVG-SE, ymax=AVG+SE), width=.2,
                  position=position_dodge(.9)) +
-  facet_grid(Tissue_Label ~ Age_Label, scales = "free_y") +
+  geom_point(aes(x = DUMMY_X_POINT, y = MUT_FREQ), color = "black", size = 0.4, alpha = 0.7) + 
+  facet_grid(TISSUE_LABEL ~ AGE_LABEL, scales = "free_y") +
   theme_bw(base_size = 12) + 
   xlab("Mutation Type") + 
   ylab("Mutation frequency") + 
+  scale_x_continuous(breaks = 1:12, labels = c("G>A","C>T", "G>C", "C>G", "G>T", "C>A", "T>A", "A>T", "T>C", "A>G", "T>G", "A>C")) + 
   scale_fill_manual(values = c("#A9A9A9","#9F2B68")) +
   theme(axis.text.x = element_text(angle = 90), 
         strip.background = element_blank(),
