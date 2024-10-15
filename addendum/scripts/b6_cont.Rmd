@@ -1,0 +1,470 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(PNWColors)
+```
+
+```{r}
+outdir_figures = "../figures/"
+outdir_files = "../files/"
+
+nonreversion_muts_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/somatic_mutations.vcf"
+nonreversion_muts = read.table(nonreversion_muts_file, header=TRUE, stringsAsFactors = FALSE)
+
+reversion_muts_file = "/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/input_files/haplotype_mutations.vcf"
+reversion_muts = read.table(reversion_muts_file, header=TRUE, stringsAsFactors = FALSE)
+
+```
+
+Combine all our variants info -- both the files that contain haplotype sites and files that contain all other sites: 
+```{r}
+all_variants = rbind(nonreversion_muts, reversion_muts)
+```
+
+```{r}
+rm(nonreversion_muts, reversion_muts)
+```
+
+```{r}
+B6_all_vars = all_variants %>%
+  filter(STRAIN == "B6") %>%
+  filter(AGE_BIN != "MID") %>%
+  filter(SAMPLE != "B6_Y3_Heart") %>%
+  filter(SAMPLE != "B6_Y5_Liver", SAMPLE != "B6_Y6_Liver", SAMPLE != "B6_Y7_Liver", SAMPLE != "B6_Y8_Liver")
+
+```
+
+```{r}
+rm(all_variants)
+```
+
+Cluster 1: FVB contamination 
+
+Dummy B6 df to ensure that we account for all samples including those without contamination:
+
+```{r}
+SAMPLE =  (unique(B6_all_vars %>%
+  filter(STRAIN == "B6") %>% select(SAMPLE))$SAMPLE)
+
+START = rep(7777, 19)
+
+B6_DUMMY_DF = cbind(data.frame(SAMPLE), data.frame(START))
+```
+
+```{r}
+
+cluster_1 = data.frame(START = c(7777), REF = c("G"), ALT = c("T"))
+
+```
+
+Contamination from other strains is calculated as the allele depth for the other strain divided by the read depth at position:
+
+```{r}
+cluster_1_cont = inner_join(B6_all_vars, cluster_1, by = c("START", "REF", "ALT")) %>%
+  select(SAMPLE, START, REF, ALT, ALT_ALLELE_DEPTH, REF_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  mutate(CONT_EST = ALT_ALLELE_DEPTH/READ_DEPTH_AT_POS) %>%
+  mutate(CONT_FLAG = ifelse(CONT_EST == 0, "NO", "YES"))
+```
+
+```{r}
+imputed_cluster_1 = left_join(B6_DUMMY_DF, cluster_1_cont, by = c("SAMPLE", "START")) %>%
+  select(SAMPLE, CONT_EST, CONT_FLAG) %>%
+  mutate(CONT_EST = ifelse(is.na(CONT_EST), 0, CONT_EST)) %>%
+  mutate(CONT_FLAG = ifelse(is.na(CONT_FLAG), "NO", CONT_FLAG))
+
+```
+
+We calculate the minimum frequency in a cluster. Assuming that a contaminated read has the contaminated allele at all sites in a cluster, the minimum frequency would denote the proportion of reads present as a result of contamination. 
+
+```{r}
+min_cont_cluster_1 = imputed_cluster_1 %>%
+  group_by(SAMPLE) %>%
+  summarise(MIN_CONT = min(CONT_EST)) %>%
+  mutate(CLUSTER = "clust_1")
+
+```
+
+```{r}
+
+b6_cluster_1_cont = ggplot(imputed_cluster_1, aes(x = START, y = CONT_EST, color = CONT_FLAG)) + 
+  geom_point(size = 0.7) + 
+  geom_text(data = min_cont_cluster_1, aes(x =7777, y = 0.001, label = formatC(MIN_CONT, digits = 2, format = "e")), size = 2, inherit.aes = FALSE) + 
+  facet_wrap(.~SAMPLE, nrow = 6) + 
+  theme_bw() + 
+  ylab("Contamination Est.") + 
+  xlab("Haplotype site") + 
+  scale_x_continuous(breaks = c(7777)) + 
+  scale_color_manual(name = "Contamination", values = c("black", "magenta")) + 
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 90))
+
+pdf(paste(outdir_figures,"/b6_cluster_1_cont.pdf",sep=""),width=7,height=5.5)
+print(b6_cluster_1_cont)
+dev.off()
+
+```
+
+Cluster 2: ALR contamination 
+
+```{r}
+SAMPLE = rep((unique(B6_all_vars %>%
+  filter(STRAIN == "B6") %>% select(SAMPLE)))$SAMPLE, each = 2)
+
+START = rep(c(4738, 9347), 19)
+
+B6_DUMMY_DF = cbind(data.frame(SAMPLE), data.frame(START))
+```
+
+```{r}
+
+cluster_2 = data.frame(START = c(4738, 9347), REF = c("C", "G"), ALT = c("A", "A"))
+
+```
+
+```{r}
+
+cluster_2_cont = inner_join(B6_all_vars, cluster_2, by = c("START", "REF", "ALT")) %>%
+  filter(STRAIN == "B6") %>%
+  select(SAMPLE, START, REF, ALT, ALT_ALLELE_DEPTH, REF_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  mutate(CONT_EST = ALT_ALLELE_DEPTH/READ_DEPTH_AT_POS) %>%
+  mutate(CONT_FLAG = ifelse(CONT_EST == 0, "NO", "YES"))
+
+```
+
+```{r}
+imputed_cluster_2 = left_join(B6_DUMMY_DF, cluster_2_cont, by = c("SAMPLE", "START")) %>%
+  select(SAMPLE, CONT_EST, CONT_FLAG) %>%
+  mutate(CONT_EST = ifelse(is.na(CONT_EST), 0, CONT_EST)) %>%
+  mutate(CONT_FLAG = ifelse(is.na(CONT_FLAG), "NO", CONT_FLAG))
+
+```
+
+```{r}
+min_cont_cluster_2 = imputed_cluster_2 %>%
+  group_by(SAMPLE) %>%
+  summarise(MIN_CONT = min(CONT_EST)) %>%
+  mutate(CLUSTER = "clust_2")
+
+```
+
+```{r}
+
+b6_cluster_2_cont = ggplot(imputed_cluster_2, aes(x = START, y = CONT_EST, color = CONT_FLAG)) + 
+  geom_point(size = 0.7) + 
+  geom_text(data = min_cont_cluster_2, aes(x = 7100, y = 0.001, label = formatC(MIN_CONT, digits = 2, format = "e")), size = 2, inherit.aes = FALSE) + 
+  facet_wrap(.~SAMPLE, nrow = 6) + 
+  theme_bw() + 
+  ylab("Contamination Est.") + 
+  xlab("Haplotype site") + 
+  scale_x_continuous(breaks = c(4738, 9347)) + 
+  scale_color_manual(name = "Contamination", values = c("black", "magenta")) + 
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 90))
+
+pdf(paste(outdir_figures,"/b6_cluster_2_cont.pdf",sep=""),width=7,height=5.5)
+print(b6_cluster_2_cont)
+dev.off()
+
+```
+
+Cluster 3: NZB contamination 
+
+```{r}
+SAMPLE = rep((unique(B6_all_vars %>%
+  filter(STRAIN == "B6") %>% select(SAMPLE)))$SAMPLE, each = 5)
+
+START = rep(c(2765, 2766, 2797, 2813, 2839), 19)
+
+B6_DUMMY_DF = cbind(data.frame(SAMPLE), data.frame(START))
+```
+
+```{r}
+
+cluster_3 = data.frame(START = c(2765, 2766, 2797, 2813, 2839), REF = c("A", "T", "C", "T", "C"), ALT = c("G", "C", "T", "C", "T"))
+
+```
+
+```{r}
+
+cluster_3_cont = inner_join(B6_all_vars, cluster_3, by = c("START", "REF", "ALT")) %>%
+  filter(STRAIN == "B6") %>%
+  select(SAMPLE, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  mutate(CONT_EST = ALT_ALLELE_DEPTH/READ_DEPTH_AT_POS) %>%
+  mutate(CONT_FLAG = ifelse(CONT_EST == 0, "NO", "YES"))
+
+```
+
+```{r}
+imputed_cluster_3 = left_join(B6_DUMMY_DF, cluster_3_cont, by = c("SAMPLE", "START")) %>%
+  select(SAMPLE, CONT_EST, CONT_FLAG) %>%
+  mutate(CONT_EST = ifelse(is.na(CONT_EST), 0, CONT_EST)) %>%
+  mutate(CONT_FLAG = ifelse(is.na(CONT_FLAG), "NO", CONT_FLAG))
+
+```
+
+```{r}
+min_cont_cluster_3 = imputed_cluster_3 %>%
+  group_by(SAMPLE) %>%
+  summarise(MIN_CONT = min(CONT_EST)) %>%
+  mutate(CLUSTER = "clust_3")
+
+```
+
+```{r}
+
+b6_cluster_3_cont = ggplot(imputed_cluster_3, aes(x = START, y = CONT_EST, color = CONT_FLAG)) + 
+  geom_point(size = 0.7) + 
+  geom_text(data = min_cont_cluster_3, aes(x = 2785, y = 0.00025, label = formatC(MIN_CONT, digits = 2, format = "e")), size = 2, inherit.aes = FALSE) + 
+  facet_wrap(.~SAMPLE, nrow = 6) + 
+  theme_bw() + 
+  ylab("Contamination Est.") + 
+  xlab("Haplotype site") + 
+  scale_y_continuous(limits = c(0, 0.00035)) + 
+  scale_x_continuous(breaks = c(2765, 2766, 2797, 2813, 2839)) + 
+  scale_color_manual(name = "Contamination", values = c("black", "magenta")) + 
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 90))
+
+pdf(paste(outdir_figures,"/b6_cluster_3_cont.pdf",sep=""),width=7,height=5.5)
+print(b6_cluster_3_cont)
+dev.off()
+
+```
+
+CLuster 4: NZB contamination 
+
+```{r}
+SAMPLE = rep((unique(B6_all_vars %>%
+  filter(STRAIN == "B6") %>% select(SAMPLE)))$SAMPLE, each = 3)
+
+START = rep(c(11842, 11845, 11932), 19)
+
+B6_DUMMY_DF = cbind(data.frame(SAMPLE), data.frame(START))
+```
+
+```{r}
+
+cluster_4 = data.frame(START = c(11842, 11845, 11932), REF = c("G", "C", "A"), ALT = c("A", "T", "C"))
+
+```
+
+```{r}
+
+cluster_4_cont = inner_join(B6_all_vars, cluster_4, by = c("START", "REF", "ALT")) %>%
+  filter(STRAIN == "B6") %>%
+  select(SAMPLE, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  mutate(CONT_EST = ALT_ALLELE_DEPTH/READ_DEPTH_AT_POS) %>%
+  mutate(CONT_FLAG = ifelse(CONT_EST == 0, "NO", "YES"))
+
+```
+
+```{r}
+imputed_cluster_4 = left_join(B6_DUMMY_DF, cluster_4_cont, by = c("SAMPLE", "START")) %>%
+  select(SAMPLE, CONT_EST, CONT_FLAG) %>%
+  mutate(CONT_EST = ifelse(is.na(CONT_EST), 0, CONT_EST)) %>%
+  mutate(CONT_FLAG = ifelse(is.na(CONT_FLAG), "NO", CONT_FLAG))
+
+```
+
+```{r}
+min_cont_cluster_4 = imputed_cluster_4 %>%
+  group_by(SAMPLE) %>%
+  summarise(MIN_CONT = min(CONT_EST)) %>%
+  mutate(CLUSTER = "clust_4")
+
+```
+
+```{r}
+
+b6_cluster_4_cont = ggplot(imputed_cluster_4, aes(x = START, y = CONT_EST, color = CONT_FLAG)) + 
+  geom_point(size = 0.7) + 
+  geom_text(data = min_cont_cluster_4, aes(x = 11890, y =1e-5, label = formatC(MIN_CONT, digits = 2, format = "e")), size = 2, inherit.aes = FALSE) + 
+  facet_wrap(.~SAMPLE, nrow = 6) + 
+  theme_bw() + 
+  ylab("Contamination Est.") + 
+  xlab("Haplotype site") + 
+  scale_x_continuous(breaks = c(11842, 11845, 11932)) + 
+  scale_color_manual(name = "Contamination", values = c("black", "magenta")) + 
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 90))
+
+pdf(paste(outdir_figures,"/b6_cluster_4_cont.pdf",sep=""),width=7,height=5.5)
+print(b6_cluster_4_cont)
+dev.off()
+
+```
+
+Cluster 5: NZB contamination 
+
+```{r}
+SAMPLE = rep((unique(B6_all_vars %>%
+  filter(STRAIN == "B6") %>% select(SAMPLE)))$SAMPLE, each = 5)
+
+START = rep(c(15498, 15548, 15577, 15587, 15602), 19)
+
+B6_DUMMY_DF = cbind(data.frame(SAMPLE), data.frame(START))
+```
+
+```{r}
+
+cluster_5 = data.frame(START = c(15498, 15548, 15577, 15587, 15602), REF = c("T", "C", "A", "C", "C"), ALT = c("A", "T", "T", "T", "T"))
+
+```
+
+```{r}
+
+cluster_5_cont = inner_join(B6_all_vars, cluster_5, by = c("START", "REF", "ALT")) %>%
+  filter(STRAIN == "B6") %>%
+  select(SAMPLE, START, REF, ALT, ALT_ALLELE_DEPTH, READ_DEPTH_AT_POS) %>%
+  mutate(CONT_EST = ALT_ALLELE_DEPTH/READ_DEPTH_AT_POS) %>%
+  mutate(CONT_FLAG = ifelse(CONT_EST == 0, "NO", "YES"))
+
+```
+
+```{r}
+imputed_cluster_5 = left_join(B6_DUMMY_DF, cluster_5_cont, by = c("SAMPLE", "START")) %>%
+  select(SAMPLE, CONT_EST, CONT_FLAG) %>%
+  mutate(CONT_EST = ifelse(is.na(CONT_EST), 0, CONT_EST)) %>%
+  mutate(CONT_FLAG = ifelse(is.na(CONT_FLAG), "NO", CONT_FLAG))
+
+```
+
+```{r}
+min_cont_cluster_5 = imputed_cluster_5 %>%
+  group_by(SAMPLE) %>%
+  summarise(MIN_CONT = min(CONT_EST)) %>%
+  mutate(CLUSTER = "clust_5")
+
+```
+
+```{r}
+
+b6_cluster_5_cont = ggplot(imputed_cluster_5, aes(x = START, y = CONT_EST, color = CONT_FLAG)) + 
+  geom_point(size = 0.7) + 
+  geom_text(data = min_cont_cluster_5, aes(x = 15570, y =4e-4, label = formatC(MIN_CONT, digits = 2, format = "e")), size = 2, inherit.aes = FALSE) + 
+  facet_wrap(.~SAMPLE, nrow = 6) + 
+  theme_bw() + 
+  ylab("Contamination Est.") + 
+  xlab("Haplotype site") + 
+  scale_x_continuous(breaks = c(15498, 15548, 15577, 15587, 15602)) + 
+  scale_color_manual(name = "Contamination", values = c("black", "magenta")) + 
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 90))
+
+pdf(paste(outdir_figures,"/b6_cluster_5_cont.pdf",sep=""),width=7,height=5.5)
+print(b6_cluster_5_cont)
+dev.off()
+
+```
+Combining the contamination measured in all clusters: 
+
+```{r}
+cont_across_clusters_df = rbind(min_cont_cluster_1, min_cont_cluster_2, min_cont_cluster_3, min_cont_cluster_4, min_cont_cluster_5)
+
+```
+
+Exporting the contamination across clusters
+
+```{r}
+write.table(cont_across_clusters_df, file = paste(outdir_files,"b6_cluster_cont_est.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+Calculating summary statistics: 
+
+```{r}
+plotting_cont_range_b6 = cont_across_clusters_df %>%
+  group_by(SAMPLE) %>%
+  summarise(AVG_CONT_CLUST = mean(MIN_CONT), MAX = max(MIN_CONT), MIN = min(MIN_CONT))
+
+```
+
+Exporting the contamination per sample:
+
+```{r}
+write.table(plotting_cont_range_b6, file = paste(outdir_files,"b6_sample_cont_est_range.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
+
+Plotting the range in contamination metrics for each sample: 
+
+```{r}
+
+b6_cont_range = ggplot(plotting_cont_range_b6, aes(x = AVG_CONT_CLUST, y = SAMPLE)) + 
+  geom_point(size = 2.3, shape = 18) + 
+  geom_point(data = cont_across_clusters_df, aes(x = MIN_CONT, y = SAMPLE, color = CLUSTER),inherit.aes = FALSE, size = 1.3) + 
+  geom_segment(aes(x = MIN, xend = MAX, y = SAMPLE, yend = SAMPLE)) + 
+  scale_color_manual(name = "Cluster", labels = c("cluster 1 (FVB)", "cluster 2 (ALR)", "cluster 3 (NZB)", "cluster 4 (NZB)", "cluster 5 (NZB)"), values = c("#6e7cb9", "#7bbcd5", "#d0e2af","#f5db99", "#e89c81")) + 
+  theme_bw() + 
+  xlab("Estimated Contamination") + 
+  ylab("Sample")
+
+
+pdf(paste(outdir_figures,"/b6_cont_range.pdf",sep=""),width=7,height=5.5)
+print(b6_cont_range)
+dev.off()
+
+```
+
+Calculating the contamination est. for each condition:
+
+
+We need the following files:
+```{r}
+#average read depth file per sample
+average_read_depth_file ="/Users/isabelserrano/Documents/Science/Analyses/Conplastic_Strains/files_and_analyses/experimental_design/files/sample_duplex_depth.txt"
+average_read_depth = read.table(average_read_depth_file, header=TRUE, stringsAsFactors = FALSE) %>%
+  filter(STRAIN == "B6")
+```
+
+To create a conservative est. we aggregate the contamination from all independent sources (e.g. across all samples)
+```{r}
+total_cont_b6_df = cont_across_clusters_df %>%
+  ungroup() %>%
+  select(SAMPLE, MIN_CONT) %>%
+  group_by(SAMPLE) %>%
+  summarise(TOTAL_CONT = sum(MIN_CONT))
+```
+
+We calculate the contamination for each biological condition by using the total level of contamination to estimate the proportion of contaminated reads in each sample. We then sum the number of contaminated reads and the read depth at each position across samples in a condition. We use these aggregates to calculate the contamination est as the total number of contaminated reads divided by the total read depth at the position.
+s
+```{r}
+cond_b6_est = total_cont_b6_df %>%
+  left_join(average_read_depth, by = "SAMPLE") %>%
+  select(SAMPLE, TISSUE, AGE_BIN, TOTAL_CONT, AVG_DUP_DEPTH) %>%
+  mutate(CONT_READS = TOTAL_CONT*AVG_DUP_DEPTH) %>%
+  select(TISSUE, AGE_BIN, AVG_DUP_DEPTH, CONT_READS) %>%
+  group_by(TISSUE, AGE_BIN) %>%
+  summarise(COND_DUP_DEPTH = sum(AVG_DUP_DEPTH), COND_CONT_READS = sum(CONT_READS)) %>%
+  mutate(COND_CONT_EST = COND_CONT_READS/COND_DUP_DEPTH) %>%
+  mutate(COND_LABEL = paste(AGE_BIN, TISSUE, sep = "_")) 
+```
+
+```{r}
+b6_cont_plot = ggplot(cond_b6_est, aes(x = COND_CONT_EST, y = COND_LABEL)) + 
+ geom_point() + 
+  theme_bw() + 
+  xlab("Condition Contamination \nEst.") + 
+  ylab("Condition") + 
+  theme(axis.text.x = element_text(angle = 90),
+        axis.title.y = element_text(size = 13),
+        legend.position = "none")
+
+pdf(paste(outdir_figures,"/b6_cond_cont_est.pdf",sep=""),width=2.85,height=3)
+print(b6_cont_plot)
+dev.off()
+
+```
+
+Exporting the contamination per condition:
+
+```{r}
+write.table(cond_b6_est, file = paste(outdir_files,"b6_condition_cont_est.txt", sep = ""), sep = "\t", quote = F, row.names = F)
+
+```
